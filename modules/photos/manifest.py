@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from dataclasses import dataclass, field
@@ -16,7 +17,17 @@ from .convert import ConvertError, Variant
 from .naming import order, out_name
 
 VERSION = 1
+MANIFEST_NAME = "_manifest.json"
 _REQUIRED = {"out": str, "src": str, "sha256": str, "variant": str, "nn": int}
+
+
+def sha256_file(path: Path) -> str:
+    """SHA-256 файла — тот же ключ, что отдаёт Drive (lsjson --hash)."""
+    h = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 class ManifestCorrupt(Exception):
@@ -159,11 +170,13 @@ class Manifest:
         self.updated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def execute(self, sources: Iterable[Source], variants: Iterable[Variant] | dict,
-                existing_outputs: set[str], render: Callable[[RenderItem], None]) -> Execution:
+                existing_outputs: set[str], render: Callable[[RenderItem], None],
+                on_plan: Callable[[Plan], None] | None = None) -> Execution:
         """План + рендер с закреплением номера только за успешно сконвертированным исходником.
 
         render(item) пишет файл item.out_name или бросает ConvertError. Если не удался новый
         исходник (номера у него ещё нет), он исключается и план пересчитывается — дыр в NN нет.
+        on_plan(plan) вызывается с каждым планом до его рендера (первый и пересчитанные).
         """
         sources = list(sources)
         existing = set(existing_outputs)
@@ -174,6 +187,8 @@ class Manifest:
         while True:
             plan = self.plan([s for s in sources if s.sha256 not in excluded], variants, existing)
             first = first or plan
+            if on_plan:
+                on_plan(plan)
             restart = False
             for item in plan.to_render:
                 sha = item.source.sha256

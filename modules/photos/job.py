@@ -10,7 +10,6 @@
 from __future__ import annotations
 
 import copy
-import hashlib
 import logging
 import re
 import shutil
@@ -24,11 +23,10 @@ from typing import Callable, Iterable
 from core.drive import CarAmbiguous, CarNotFound, Drive, DriveError
 
 from .convert import SOURCE_SUFFIXES, ConvertError, Variant, read_meta, to_jpeg
-from .manifest import Manifest, ManifestCorrupt, RenderItem, Source
+from .manifest import MANIFEST_NAME, Manifest, ManifestCorrupt, Plan, RenderItem, Source, sha256_file
 
 log = logging.getLogger(__name__)
 
-MANIFEST_NAME = "_manifest.json"
 SPACE_RESERVE = 1.2  # скачиваемое + 20%
 
 Progress = Callable[[int, int], None]
@@ -130,14 +128,6 @@ class Report:
 
 # ---------- помощники ----------
 
-def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
-
-
 def _mtime(value: str) -> datetime | None:
     """ISO UTC от rclone → aware datetime (naming переведёт в местное). Наносекунды обрезаются."""
     if not value:
@@ -212,8 +202,8 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
         manifest = Manifest.load(manifest_local, mh=code)
     except ManifestCorrupt as e:
         raise ManifestBroken(
-            f"{code}: {e} ({drive.output_subdir}/{MANIFEST_NAME}). Папку не трогаю: "
-            f"проверь или удали этот файл и запусти снова."
+            f'{code}: файл учёта {MANIFEST_NAME} в папке "{drive.output_subdir}" повреждён. '
+            "Удали или исправь его — бот не будет перезаписывать папку вслепую."
         ) from None
     before = copy.deepcopy(manifest.files)
     existing = outputs - {MANIFEST_NAME}
@@ -240,7 +230,7 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
         sha, taken = f.sha256, None
         if f.name in need:
             path = fetch(f.name)
-            sha = sha or _sha256(path)
+            sha = sha or sha256_file(path)
             try:
                 taken = read_meta(path).taken
             except ConvertError as e:
@@ -248,40 +238,60 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
                 continue
         sources.append(Source(f.name, sha, taken, _mtime(f.mtime)))
 
-    plan = Manifest(code, copy.deepcopy(manifest.files)).plan(sources, variants, existing)
-    total = len(plan.to_render)
-    if total:
-        if announce:
-            n = len({i.source.sha256 for i in plan.to_render})
-            announce(f"{code}: {files_word(n)}, конвертирую")
-        if not out_exists:
-            drive.mkdir(out_dir)
-            out_exists = True
-    if progress:
-        progress(0, total)
+    # total и announce — из того же плана, по которому идёт рендер (execute; пересчёт после сбоя)
+    total = 0
+    attempts = 0
+    announced = False
 
-    count = 0
+    def on_plan(plan: Plan) -> None:
+        nonlocal total, announced
+        total = attempts + len(plan.to_render)
+        if plan.to_render and not announced:
+            announced = True
+            if announce:
+                n = len({i.source.sha256 for i in plan.to_render})
+                announce(f"{code}: {files_word(n)}, конвертирую")
+        if progress:
+            progress(min(attempts, total), total)
+
+    uploaded: list[str] = []
 
     def render(item: RenderItem) -> None:
-        nonlocal count
+        nonlocal attempts, out_exists
         dst = out_local / item.out_name
         try:
             to_jpeg(fetch(item.source.name), item.variant, dst)
         finally:
-            count += 1
+            attempts += 1
             if progress:
-                progress(min(count, total), total)
+                progress(min(attempts, total), total)
+        if not out_exists:  # «На выгрузку» — только когда есть что залить
+            drive.mkdir(out_dir)
+            out_exists = True
         drive.push(dst, f"{out_dir}/{item.out_name}")
+        uploaded.append(item.out_name)
         dst.unlink(missing_ok=True)
 
-    ex = manifest.execute(sources, variants, existing, render)
-    errors.extend(ex.errors)
-
-    if manifest.files != before or MANIFEST_NAME not in outputs:
-        if not out_exists:
-            drive.mkdir(out_dir)
+    def push_manifest() -> None:
+        # манифест — последним; без него и без залитых JPEG на Drive ничего не создаём
+        if manifest.files == before and MANIFEST_NAME in outputs:
+            return
+        if not manifest.files and MANIFEST_NAME not in outputs:
+            return
         manifest.dump(tmp / "manifest.out.json")
-        drive.push(tmp / "manifest.out.json", f"{out_dir}/{MANIFEST_NAME}")  # последним
+        drive.push(tmp / "manifest.out.json", f"{out_dir}/{MANIFEST_NAME}")
+
+    try:
+        ex = manifest.execute(sources, variants, existing, render, on_plan=on_plan)
+    except DriveError:
+        if uploaded:  # уже залитое учитываем, чтобы следующий запуск его не переделывал
+            try:
+                push_manifest()
+            except DriveError:
+                log.warning("%s: манифест после сбоя заливки не залит", code)
+        raise
+    errors.extend(ex.errors)
+    push_manifest()
 
     rendered = {i.out_name for i in ex.done}
     return Report(
@@ -290,7 +300,7 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
         skipped=len([i for i in ex.first_plan.skipped if i.out_name not in rendered]),
         failed=errors,
         orphans=list(ex.plan.orphans),
-        link=Drive.folder_link(drive.folder_id(out_dir)) if out_exists or drive.exists(out_dir) else None,
+        link=Drive.folder_link(drive.folder_id(out_dir)) if out_exists else None,
         status="partial" if errors else "done",
     )
 

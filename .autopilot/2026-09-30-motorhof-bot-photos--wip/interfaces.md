@@ -88,3 +88,4 @@
 - Помощники: `format_duration(sec)`, `files_word(n)`, `MANIFEST_NAME`, `SPACE_RESERVE=1.2`.
 - CLI: `python -m modules.photos MH_1022 [full]` (Drive из настроек, workdir = settings.tmp_dir); коды 0/1/2/3.
 - Манифест заливается последним и только если изменился; JPEG заливается сразу после конвертации.
+- (доработка 04) `manifest.MANIFEST_NAME`, `manifest.sha256_file(path)` — единственное место; `Manifest.execute(..., on_plan=None)` вызывает `on_plan(plan)` перед рендером каждого плана. Частичный сбой заливки → манифест с уже залитым уходит на Drive до ошибки. Ноль JPEG и манифеста не было → `На выгрузку` не создаётся. Фикстура `vienna_tz` в tests/photos_job/conftest.py.

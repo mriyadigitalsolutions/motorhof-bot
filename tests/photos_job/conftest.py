@@ -1,6 +1,8 @@
 """Общее для тестов цикла job.run: дерево «как на Drive», фейковый rclone, синтетические снимки."""
 from __future__ import annotations
 
+import os
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -79,3 +81,17 @@ def pushed(fake: FakeRclone) -> list[str]:
 
 def pulled(fake: FakeRclone) -> list[str]:
     return [c[1].rsplit("/", 1)[-1] for c in fake.commands("copyto") if c[1].startswith("motorhof:")]
+
+
+@pytest.fixture
+def vienna_tz():
+    """Часовой пояс процесса — Europe/Vienna на время теста; после — как было."""
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "Europe/Vienna"
+    time.tzset()
+    yield
+    if old is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = old
+    time.tzset()

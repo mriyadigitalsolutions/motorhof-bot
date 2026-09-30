@@ -153,7 +153,7 @@ def test_corrupt_manifest_stops_without_writes(base, fake, drive, workdir, listi
     (photos / "На выгрузку" / "_manifest.json").write_text("{not json", encoding="utf-8")
     with pytest.raises(job.JobError) as e:
         job.run("MH_1022", listing, drive, workdir, None)
-    assert e.value.user_text.startswith("MH_1022: манифест повреждён")
+    assert e.value.user_text.startswith("MH_1022: файл учёта _manifest.json в папке \"На выгрузку\" повреждён.")
     assert _only_reads(fake)
     assert (photos / "На выгрузку" / "_manifest.json").read_text(encoding="utf-8") == "{not json"
 
@@ -190,7 +190,9 @@ def test_tmp_removed_after_success_and_after_error(base, fake, drive, workdir, l
     with pytest.raises(job.JobError):
         job.run("MH_1022", listing, drive, workdir, None)
     assert list(workdir.iterdir()) == []
-    assert not (photos / "На выгрузку" / "_manifest.json").exists()  # манифест только после всех JPEG
+    # залитое до сбоя учтено в манифесте, упавший — нет
+    manifest = json.loads((photos / "На выгрузку" / "_manifest.json").read_text(encoding="utf-8"))
+    assert [f["out"] for f in manifest["files"]] == ["MH_1022_01.jpg"]
     job.run("MH_1022", listing, drive, workdir, None)
     assert list(workdir.iterdir()) == []
 
@@ -234,23 +236,16 @@ def test_report_text_link_progress_and_announce(base, fake, drive, workdir, list
     assert said == []  # нечего делать — промежуточного сообщения нет
 
 
-def test_drive_mtime_is_utc_aware_for_ordering(base, fake, drive, workdir, listing, monkeypatch):
+def test_drive_mtime_is_utc_aware_for_ordering(base, fake, drive, workdir, listing, vienna_tz):
     import os
-    import time
     from datetime import timezone
-    monkeypatch.setenv("TZ", "Europe/Vienna")
-    time.tzset()
-    try:
-        photos = make_car(base)
-        # «b»: EXIF 12:30 по Вене (= 10:30 UTC); «a»: без EXIF, дата файла 11:00 UTC (= 13:00 по Вене)
-        make_jpeg(photos / "b.jpg", datetime(2026, 9, 1, 12, 30))
-        make_jpeg(photos / "a.jpg", None, color=(10, 200, 10))
-        ts = datetime(2026, 9, 1, 11, 0, tzinfo=timezone.utc).timestamp()
-        os.utime(photos / "a.jpg", (ts, ts))
-        job.run("MH_1022", listing, drive, workdir, None)
-    finally:
-        monkeypatch.undo()
-        time.tzset()
+    photos = make_car(base)
+    # «b»: EXIF 12:30 по Вене (= 10:30 UTC); «a»: без EXIF, дата файла 11:00 UTC (= 13:00 по Вене)
+    make_jpeg(photos / "b.jpg", datetime(2026, 9, 1, 12, 30))
+    make_jpeg(photos / "a.jpg", None, color=(10, 200, 10))
+    ts = datetime(2026, 9, 1, 11, 0, tzinfo=timezone.utc).timestamp()
+    os.utime(photos / "a.jpg", (ts, ts))
+    job.run("MH_1022", listing, drive, workdir, None)
     manifest = json.loads((photos / "На выгрузку" / "_manifest.json").read_text(encoding="utf-8"))
     assert {f["out"]: f["src"] for f in manifest["files"]} == \
         {"MH_1022_01.jpg": "b.jpg", "MH_1022_02.jpg": "a.jpg"}
@@ -272,3 +267,51 @@ def test_end_to_end_real_fixtures(base, fake, drive, workdir, listing):
     again = job.run("MH_1022", listing, drive, workdir, None)
     assert [n for n in pulled(fake) if n != "_manifest.json"] == []
     assert pushed(fake) == [] and (again.done, again.skipped) == (0, 2)
+
+
+def test_upload_failure_keeps_uploaded_in_manifest(base, fake, drive, workdir, listing):
+    photos = make_car(base)
+    for i in range(3):
+        make_jpeg(photos / f"p{i}.jpg", datetime(2026, 9, 1 + i), color=(10 * i, 50, 90))
+    fake.fail("copyto", match="MH_1022_03.jpg", times=1)
+    with pytest.raises(job.DriveFailed):
+        job.run("MH_1022", listing, drive, workdir, None)
+    assert pushed(fake)[-1] == "_manifest.json"
+    fake.calls.clear()
+    again = job.run("MH_1022", listing, drive, workdir, None)
+    assert [n for n in pulled(fake) if n != "_manifest.json"] == ["p2.jpg"]
+    assert pushed(fake) == ["MH_1022_03.jpg", "_manifest.json"]
+    assert (again.done, again.skipped) == (1, 2)
+
+
+def test_nothing_uploaded_creates_nothing(base, fake, drive, workdir, listing):
+    photos = make_car(base)
+    (photos / "IMG_4100.HEIC").write_bytes(b"")
+    report = job.run("MH_1022", listing, drive, workdir, None)
+    assert report.failed == [("IMG_4100.HEIC", "файл повреждён или не читается")]
+    assert not (photos / "На выгрузку").exists()
+    assert fake.commands("mkdir") == [] and pushed(fake) == []
+    assert report.link is None
+
+
+def test_corrupt_manifest_text(base, fake, drive, workdir, listing):
+    photos = make_car(base)
+    make_jpeg(photos / "a.jpg", datetime(2026, 9, 1))
+    (photos / "На выгрузку").mkdir()
+    (photos / "На выгрузку" / "_manifest.json").write_text("[]", encoding="utf-8")
+    with pytest.raises(job.ManifestBroken) as e:
+        job.run("MH_1022", listing, drive, workdir, None)
+    assert e.value.user_text == ('MH_1022: файл учёта _manifest.json в папке "На выгрузку" повреждён. '
+                                 "Удали или исправь его — бот не будет перезаписывать папку вслепую.")
+
+
+def test_progress_total_follows_render_plan(base, fake, drive, workdir, listing):
+    photos = make_car(base)
+    make_jpeg(photos / "a.jpg", datetime(2026, 9, 1))
+    make_jpeg(photos / "b.jpg", datetime(2026, 9, 2), color=(200, 0, 0))
+    make_jpeg(photos / "b_copy.jpg", datetime(2026, 9, 2), color=(200, 0, 0))  # тот же sha, что b.jpg
+    fake.no_hash = {"b_copy.jpg"}  # без хэша Drive черновой план его не видит
+    calls, said = [], []
+    job.run("MH_1022", listing, drive, workdir, lambda d, t: calls.append((d, t)), announce=said.append)
+    assert said == ["MH_1022: 2 файла, конвертирую"]
+    assert calls[0] == (0, 2) and calls[-1] == (2, 2)

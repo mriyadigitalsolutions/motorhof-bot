@@ -8,15 +8,16 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .convert import SOURCE_SUFFIXES, ConvertError, Variant, load_variants, read_meta, to_jpeg
-from .manifest import Manifest, ManifestCorrupt, RenderItem, Source
+from core.drive import Drive
+from core.settings import load_settings
 
-MANIFEST_NAME = "_manifest.json"
+from .convert import SOURCE_SUFFIXES, ConvertError, Variant, load_variants, read_meta, to_jpeg
+from .job import JobError, ManifestBroken, run
+from .manifest import MANIFEST_NAME, Manifest, ManifestCorrupt, RenderItem, Source, sha256_file
 
 
 @dataclass
@@ -27,14 +28,6 @@ class LocalReport:
     rendered: list[str] = field(default_factory=list)
     errors: list[tuple[str, str]] = field(default_factory=list)   # (имя исходника, причина)
     orphans: list[str] = field(default_factory=list)
-
-
-def sha256_file(path: Path) -> str:
-    h = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
 
 
 def select_variants(all_variants: dict[str, Variant], extra: list[str]) -> list[Variant]:
@@ -99,11 +92,6 @@ def format_report(r: LocalReport) -> str:
 
 def run_drive(code: str, extra: list[str]) -> int:
     """Режим с Drive: тот же job.run, что у бота; прогресс — в stderr."""
-    from core.drive import Drive
-    from core.settings import load_settings
-
-    from .job import JobError, ManifestBroken, run
-
     try:
         variants = select_variants(load_variants(), list(extra))
     except ValueError as e:
