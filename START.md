@@ -3,10 +3,10 @@
 ## 1. Репозиторий
 1. Создать пустой приватный репозиторий `motorhof-bot` на GitHub (организация MOTORHOF OG).
 2. Клонировать на рабочую машину: `git clone <url> C:\dev\motorhof-bot` (Windows) или `~/dev/motorhof-bot` (Mac).
-3. Скопировать в корень репозитория всё содержимое этого пакета: CLAUDE.md, brief.md, START.md, .gitignore, .env.example, tests/.
+3. Скопировать в корень репозитория всё содержимое этого пакета: PLAN.md, CLAUDE.md, brief.md, START.md, .gitignore, .env.example, tests/.
 
 ## 2. PLAN.md
-Открыть документ «MOTORHOF Photo Pipeline: план для Claude Code» в Claude, экспортировать как Markdown и сохранить в корень репозитория под именем `PLAN.md`.
+PLAN.md уже в пакете. Если план правился в документе Claude после 30.09.2026, экспортировать документ как Markdown заново и заменить файл.
 Схемы (архитектура, дорожная карта) в экспорт не попадают, текст покрывает их полностью.
 
 ## 3. Фикстуры
