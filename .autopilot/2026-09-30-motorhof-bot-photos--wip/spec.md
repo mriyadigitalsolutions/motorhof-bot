@@ -129,7 +129,7 @@
 | 63 | R30 | `restart: unless-stopped`; SQLite и tmp в volume `./data`; README требует `systemctl enable docker` (демон стартует при загрузке хоста — без этого `unless-stopped` не сработает после reboot) | после `docker compose restart` очередь и журнал на месте; в README шаг проверки «reboot → /status отвечает» (PLAN §8 пре-деплой) |
 | 64 | R31 | Обновление одной командой: `git pull && docker compose up -d --build` | в README |
 | 65 | R28 | Drive только через rclone (`subprocess`, список аргументов, без shell), remote из `RCLONE_REMOTE`, корень из `DRIVE_ROOT`; `rclone.conf` монтируется **на запись** (rclone обновляет в нём OAuth-токен) | тест, compose |
-| 66 | R04, R05, R32, R46 | Модуль — пакет `modules/<имя>/` с `register(router, queue)`; подключается одной строкой в `modules/__init__.py`; модули не импортируют друг друга; есть `modules/_template/` | тест: включение шаблонного модуля одной строкой добавляет его команду |
+| 66 | R04, R05, R32, R46 | Модуль — пакет `modules/<имя>/` с `register(router, queue, **kwargs)` (kwargs — общие `settings` от бота; поправка по таску 05); подключается одной строкой в `modules/__init__.py`; модули не импортируют друг друга; есть `modules/_template/` | тест: включение шаблонного модуля одной строкой добавляет его команду |
 | 67 | R33 | Логи в stdout, уровень из `LOG_LEVEL`; фильтр вырезает значение `TELEGRAM_BOT_TOKEN`, всё похожее на токен бота, и OAuth-материал rclone (`access_token`, `refresh_token`, `client_secret`, `ya29.…`, `1//…`, `"token": {…}`). Тот же редактор применяется к stderr rclone до того, как он попадёт в лог, в журнал `runs.error_text` и в сообщение партнёру; rclone никогда не запускается с `-vv`/`--dump` | тест фильтра на логе и на stderr; `git log -p` чист |
 | 68 | R34, R41 | Значения токена, ID и `rclone.conf` пользователь вписывает сам; `.env.example` содержит только имена | `.env.example` |
 | 69 | R35 | README.md для следующей сессии: что это, как запустить, где логи, как добавить партнёра / админа / вариант / модуль, как обновить, как проверить | README |
@@ -184,7 +184,7 @@
    `/fotos` этой машины после «тишины» возвращает state в `idle`. Callback-данные кнопок:
    `ph:del:<id>`, `ph:keep:<id>`, `ph:ok:<id>`, `ph:no:<id>` — id запроса, а не номер машины,
    чтобы старые кнопки распознавались как устаревшие.
-9. **Доступ** — outer-middleware aiogram на message и callback_query: чужой ID → событие
+9. **Доступ** — outer-middleware aiogram на все апдейты (`dp.update`; поправка по таску 05 — строже, чем message+callback_query, по истории 46): чужой ID → событие
    поглощается без ответа, строка в лог. Только `chat.type == private`.
 10. **Настройки** — `core/settings.py`, dataclass из окружения; `.env.example` пополняется:
     `ADMIN_TELEGRAM_IDS`, `DNG_REMINDER_DAYS=60`, `DAILY_CHECK_TIME=03:00`, `TZ=Europe/Vienna`,
