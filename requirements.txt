@@ -1,0 +1,5 @@
+aiogram==3.31.0
+rawpy==0.27.1
+pillow==12.3.0
+pillow-heif==1.8.0
+PyYAML==6.0.3
