@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T21:32:23+00:00",
+  "updatedAt": "2026-09-30T21:37:57+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -223,7 +223,7 @@ window.STATE =
       "zone": [
         "modules/photos/job.py"
       ],
-      "status": "in-progress",
+      "status": "review",
       "retries": 0,
       "repairs": 0,
       "handoffs": 0,
