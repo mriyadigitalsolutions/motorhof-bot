@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T21:29:31+00:00",
+  "updatedAt": "2026-09-30T21:31:41+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -133,9 +133,13 @@ window.STATE =
       ],
       "status": "review",
       "retries": 0,
-      "repairs": 0,
+      "repairs": 2,
       "handoffs": 0,
-      "startedAt": "2026-09-30T21:22:59+00:00"
+      "startedAt": "2026-09-30T21:22:59+00:00",
+      "repairFindings": [
+        "CarAmbiguous без корневой папки — история 8",
+        "фейк/таймаут/локальный режим/битый JSON/строгий код — craft"
+      ]
     },
     {
       "id": "03",
