@@ -79,3 +79,12 @@
 - Runner: `(args: list[str]) -> RunResult(returncode, stdout, stderr)`; `TOPS`.
 - Фейк: `tests/fakes/fake_rclone.py`: `FakeRclone(base, remote="motorhof", hashes=True, no_hash=set())`, `.fail(command, returncode=1, stderr=..., match=None, times=None)`, `.calls`, `.commands(cmd)`, `.trashed`, `fake_id(rel)`; `motorhof:X` → `base/X`; отдаёт ID и Hashes.sha256.
 - (доработка 02) `Drive(..., timeout: float = 1800)`, `DEFAULT_TIMEOUT`; runner `(args, timeout) -> RunResult`; истёк → `DriveError` «rclone не ответил за N с…»; битый JSON → `DriveError` «rclone вернул непонятный ответ…». Локальный режим только при пустом remote или remote с «/». `find_car` с кодом не формата `(MH|KO)_<цифры>` → `ValueError` до вызова rclone. `CarAmbiguous` показывает полные пути от корня. Фейк: `fail(..., stdout="", hang=False)`, `.timeouts`, соблюдает `--max-depth`, отвергает `..`.
+
+### Из таска 04 — цикл машины (modules/photos/job.py)
+
+- `job.run(code, variants, drive, workdir, progress=None, *, announce=None) -> Report`; `progress(done, total)` — сначала (0, total), потом после каждого JPEG; `announce(text)` один раз «MH_1022: N файлов, конвертирую», только если есть что рендерить — бот передаёт сюда `queue.say`.
+- `Report(code, done, skipped, failed: list[(имя, причина)], orphans: list[str], duration, link, status: "done"|"partial"|"empty")`, `.text()`; пустая `Фотографии` → `Report(status="empty")`, не исключение.
+- `JobError(user_text)` (`.user_text`, `.status="failed"`) и подклассы `BadCode`, `CarMissing`, `CarDuplicate`, `NoPhotosFolder`, `ManifestBroken`, `NoSpace`, `DriveFailed`.
+- Помощники: `format_duration(sec)`, `files_word(n)`, `MANIFEST_NAME`, `SPACE_RESERVE=1.2`.
+- CLI: `python -m modules.photos MH_1022 [full]` (Drive из настроек, workdir = settings.tmp_dir); коды 0/1/2/3.
+- Манифест заливается последним и только если изменился; JPEG заливается сразу после конвертации.

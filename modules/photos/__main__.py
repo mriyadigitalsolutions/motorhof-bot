@@ -1,7 +1,9 @@
 """CLI модуля photos для проверки без бота.
 
 Локальный режим: python -m modules.photos --in <папка> --out <папка> --mh MH_1022 [--variant full]
-Режим с Drive (python -m modules.photos MH_1022 [full]) добавляется отдельно.
+Режим с Drive: python -m modules.photos MH_1022 [full] — полный цикл через настоящий Drive
+(настройки из окружения, как у бота), печатает отчёт. Код выхода: 0 — готово, 1 — ошибка задачи,
+2 — ошибка аргументов, 3 — манифест повреждён.
 """
 from __future__ import annotations
 
@@ -95,6 +97,34 @@ def format_report(r: LocalReport) -> str:
     return "\n".join(lines)
 
 
+def run_drive(code: str, extra: list[str]) -> int:
+    """Режим с Drive: тот же job.run, что у бота; прогресс — в stderr."""
+    from core.drive import Drive
+    from core.settings import load_settings
+
+    from .job import JobError, ManifestBroken, run
+
+    try:
+        variants = select_variants(load_variants(), list(extra))
+    except ValueError as e:
+        print(f"Ошибка: {e}", file=sys.stderr)
+        return 2
+    settings = load_settings()
+    drive = Drive.from_settings(settings)
+    try:
+        report = run(code.strip().upper(), variants, drive, settings.tmp_dir,
+                     lambda done, total: print(f"{done}/{total}", file=sys.stderr),
+                     announce=lambda text: print(text, file=sys.stderr))
+    except ManifestBroken as e:
+        print(e.user_text, file=sys.stderr)
+        return 3
+    except JobError as e:
+        print(e.user_text, file=sys.stderr)
+        return 1
+    print(report.text())
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="python -m modules.photos", description=__doc__.splitlines()[0])
     ap.add_argument("code", nargs="?", help="номер машины для режима с Drive (MH_1022)")
@@ -106,9 +136,9 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
 
     if args.in_dir is None:
-        # Место для режима с Drive: python -m modules.photos MH_1022 [full]
-        print("Режим с Drive пока не подключён; используйте --in/--out/--mh.", file=sys.stderr)
-        return 2
+        if not args.code:
+            ap.error("укажи номер машины (MH_1022) или --in/--out/--mh для локального режима")
+        return run_drive(args.code, args.extra)
     if args.out_dir is None or not args.mh:
         ap.error("для локального режима нужны --in, --out и --mh")
     try:
