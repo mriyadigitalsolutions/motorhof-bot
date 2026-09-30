@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T22:26:34+00:00",
+  "updatedAt": "2026-09-30T22:27:41+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -50,7 +50,7 @@ window.STATE =
       "status": "done",
       "startedAt": "2026-09-30T21:12:54+00:00",
       "finishedAt": "2026-09-30T22:26:34+00:00",
-      "note": "7 из 7 тасков готовы"
+      "note": "7 из 7 + таск доводки 08"
     },
     {
       "id": "review",
@@ -380,6 +380,37 @@ window.STATE =
         "passed": 23,
         "failed": 0
       }
+    },
+    {
+      "id": "08",
+      "title": "Доводка по отложенным находкам ревью",
+      "requirements": [
+        "R26",
+        "R25",
+        "R33",
+        "R45",
+        "R24"
+      ],
+      "blockedBy": [
+        "01",
+        "02",
+        "03",
+        "04",
+        "05",
+        "06",
+        "07"
+      ],
+      "wave": 6,
+      "zone": [
+        "core/settings.py",
+        "core/queue.py",
+        "modules/photos/",
+        "tests/"
+      ],
+      "status": "pending",
+      "retries": 0,
+      "repairs": 0,
+      "handoffs": 0
     }
   ],
   "singlePass": null,
@@ -438,5 +469,46 @@ window.STATE =
     "manifestSpec": "abc0acae4069042f5",
     "craft": "a9d5a828dfc7f2f9e"
   },
-  "blind": null
+  "blind": null,
+  "concernsTriage": {
+    "fixNow": [
+      0,
+      1,
+      2,
+      10,
+      14,
+      22,
+      24,
+      25,
+      26,
+      27,
+      28,
+      31,
+      32
+    ],
+    "report": [
+      3,
+      5,
+      6,
+      7,
+      8,
+      9,
+      11,
+      12,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      23,
+      29,
+      30
+    ],
+    "drop": {
+      "4": "решено в таске 05 — photos.register есть",
+      "13": "вкус: запасной импорт безвреден"
+    }
+  }
 }
