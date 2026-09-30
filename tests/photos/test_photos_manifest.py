@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import json
-import time
 from datetime import datetime, timezone
 
 import pytest
@@ -136,16 +135,6 @@ def test_corrupt_or_foreign_manifest(tmp_path, content):
     path.write_text(content)
     with pytest.raises(ManifestCorrupt):
         Manifest.load(path, mh="MH_1022")
-
-
-@pytest.fixture
-def vienna_tz(monkeypatch):
-    """Процесс в TZ Europe/Vienna (UTC+2 в сентябре), чтобы UTC и местное время различались."""
-    monkeypatch.setenv("TZ", "Europe/Vienna")
-    time.tzset()
-    yield
-    monkeypatch.undo()
-    time.tzset()
 
 
 def test_mtime_compared_with_taken_in_local_time(vienna_tz):

@@ -30,11 +30,15 @@ class LocalReport:
     orphans: list[str] = field(default_factory=list)
 
 
+class UnknownVariant(ValueError):
+    """Запрошен вариант, которого нет в variants.yaml, — ошибка аргументов (код 2)."""
+
+
 def select_variants(all_variants: dict[str, Variant], extra: list[str]) -> list[Variant]:
     """Постоянные варианты + запрошенные по требованию (full)."""
     unknown = [n for n in extra if n not in all_variants]
     if unknown:
-        raise ValueError(f"неизвестный вариант: {', '.join(unknown)}")
+        raise UnknownVariant(f"неизвестный вариант: {', '.join(unknown)}")
     return [v for v in all_variants.values() if not v.on_demand or v.name in extra]
 
 
@@ -94,7 +98,7 @@ def run_drive(code: str, extra: list[str]) -> int:
     """Режим с Drive: тот же job.run, что у бота; прогресс — в stderr."""
     try:
         variants = select_variants(load_variants(), list(extra))
-    except ValueError as e:
+    except UnknownVariant as e:
         print(f"Ошибка: {e}", file=sys.stderr)
         return 2
     settings = load_settings()
@@ -134,7 +138,7 @@ def main(argv: list[str] | None = None) -> int:
     except ManifestCorrupt as e:
         print(f"Остановлено: {e}. Папку не трогаю.", file=sys.stderr)
         return 3
-    except ValueError as e:
+    except UnknownVariant as e:
         print(f"Ошибка: {e}", file=sys.stderr)
         return 2
     print(format_report(report))

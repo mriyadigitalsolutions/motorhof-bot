@@ -39,6 +39,15 @@ class QueueFull(Exception):
         self.limit = limit
 
 
+class JobFailedQuietly(Exception):
+    """Обработчик сам сообщил о сбое: задача — failed, общий текст «задача упала» не шлётся.
+    text (если задан) уходит через notify в job.chat_id вместо общего текста."""
+
+    def __init__(self, text: str | None = None) -> None:
+        super().__init__(text or "задача не выполнена")
+        self.text = text
+
+
 @dataclass(frozen=True)
 class Job:
     id: int
@@ -92,12 +101,16 @@ class JobQueue:
         self.poll_interval = poll_interval
         self.schedule_interval = schedule_interval
         self._daily: list[_Daily] = []
-        self.notify: Notify | None = None
+        self._notify: Notify | None = None
         self._handlers: dict[str, Handler] = {}
         self._interrupted_text: dict[str, InterruptedText] = {}
         self._loop: asyncio.AbstractEventLoop | None = None
         self._wake: asyncio.Event | None = None
         self._tasks: list[asyncio.Task] = []
+
+    def set_notify(self, notify: Notify) -> None:
+        """Подключает отправку сообщений без запуска воркера (start делает то же сам)."""
+        self._notify = notify
 
     def register_kind(self, kind: str, handler: Handler,
                       on_interrupted: InterruptedText | None = None) -> None:
@@ -183,7 +196,7 @@ class JobQueue:
         """Промежуточное сообщение партнёру («24 файла, конвертирую»). Из потока обработчика
         ждёт доставки; из event loop — ставит отправку задачей."""
         loop = self._loop
-        if self.notify is None or loop is None:
+        if self._notify is None or loop is None:
             log.info("сообщение без адресата (очередь не запущена): %s", text)
             return
         try:
@@ -199,11 +212,11 @@ class JobQueue:
             log.exception("не удалось отправить сообщение по задаче %s", job.id)
 
     async def _send(self, job: Job, text: str) -> None:
-        if self.notify is None:
+        if self._notify is None:
             log.info("сообщение без адресата: %s", text)
             return
         try:
-            await self.notify(job, text)
+            await self._notify(job, text)
         except Exception:
             log.exception("уведомление по задаче %s не отправлено", job.id)
 
@@ -239,6 +252,11 @@ class JobQueue:
                 result = await handler(job)
             else:
                 result = await asyncio.to_thread(handler, job)
+        except JobFailedQuietly as exc:
+            log.warning("задача %s (%s) не выполнена: %s", job.id, job.kind, exc)
+            self._finish(job.id, "failed")
+            if exc.text:
+                await self._send(job, exc.text)
         except Exception as exc:
             log.exception("задача %s (%s) упала", job.id, job.kind)
             self._finish(job.id, "failed")
@@ -265,7 +283,7 @@ class JobQueue:
     async def start(self, notify: Notify) -> None:
         """Помечает зависшие задачи interrupted и уведомляет о них, затем запускает воркер
         и планировщик в текущем event loop."""
-        self.notify = notify
+        self.set_notify(notify)
         self._loop = asyncio.get_running_loop()
         self._wake = asyncio.Event()
         for job in self.recover_interrupted():

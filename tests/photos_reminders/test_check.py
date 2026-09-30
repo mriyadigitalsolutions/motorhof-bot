@@ -4,11 +4,11 @@ from __future__ import annotations
 import shutil
 
 from modules.photos.reminders import Reminders
-from tests.photos_reminders.conftest import MB, PARTNER, Access, add_converted, car_dir, move
+from tests.photos_reminders.conftest import MB, PARTNER, Access, add_converted, make_car, move
 
 
 def _car_with_dng(base, count=2, size=MB):
-    photos = car_dir(base)
+    photos = make_car(base)
     for i in range(count):
         add_converted(photos, "MH_1022", f"IMG_{i}.DNG", size, i + 1)
     return photos
@@ -54,7 +54,7 @@ async def test_sold_move_asks_once_then_only_60_day_cycle(base, service, clock, 
 
 
 async def test_already_sold_at_first_conversion_asked_next_night(base, service, clock, outbox):
-    photos = car_dir(base, top="MH_AUTO_ПРОДАНО")
+    photos = make_car(base, top="MH_AUTO_ПРОДАНО")
     add_converted(photos, "MH_1022", "IMG_1.DNG", MB, 1)
     service.record_done("MH_1022", PARTNER, PARTNER)
     clock.advance(hours=17)
@@ -73,7 +73,7 @@ async def test_missing_or_duplicated_car_skipped_with_log(base, service, clock, 
     assert "MH_1022: папка машины не найдена" in caplog.text
 
     _car_with_dng(base)
-    car_dir(base, top="MH_AUTO_ПРОДАНО", name="MH_1022_Mazda_2_alt")
+    make_car(base, top="MH_AUTO_ПРОДАНО", name="MH_1022_Mazda_2_alt")
     caplog.clear()
     await service.check()
     assert outbox.messages == []
@@ -81,7 +81,7 @@ async def test_missing_or_duplicated_car_skipped_with_log(base, service, clock, 
 
 
 async def test_no_question_without_dng_that_have_ready_jpeg(base, service, clock, outbox):
-    photos = car_dir(base)
+    photos = make_car(base)
     add_converted(photos, "MH_1022", "IMG_1.HEIC", MB, 1)          # HEIC не удаляется никогда
     add_converted(photos, "MH_1022", "IMG_2.DNG", MB, 2, jpeg=False)  # JPEG не залит
     add_converted(photos, "MH_1022", "IMG_3.DNG", MB, 3, orphan=True)

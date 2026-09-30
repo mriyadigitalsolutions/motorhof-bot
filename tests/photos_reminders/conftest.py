@@ -8,14 +8,11 @@ from pathlib import Path
 import pytest
 
 from core.db import Database
-from core.drive import Drive
 from core.queue import JobQueue
 from modules.photos.manifest import MANIFEST_NAME, Manifest
 from modules.photos.reminders import Reminders
-from tests.fakes.fake_rclone import FakeRclone
+from tests.fakes.drive_tree import ROOT, make_car  # noqa: F401 — make_car реэкспорт для тестов
 
-ROOT = "MOTORHOF_AUTO"
-TOPS = ("MH_AUTO_НАЛИЧИЕ", "MH_AUTO_ПРОДАНО", "KO_AUTO_НАЛИЧИЕ", "KO_AUTO_ПРОДАНО")
 START = datetime(2026, 9, 30, 10, 0, tzinfo=timezone.utc)
 PARTNER, OTHER, ADMIN = 111, 222, 999
 MB = 1_000_000
@@ -61,15 +58,6 @@ class Access:
         return set(self._admins)
 
 
-def car_dir(base: Path, top: str = "MH_AUTO_НАЛИЧИЕ", name: str = "MH_1022_Mazda_2",
-            year: str = "2026") -> Path:
-    for t in TOPS:
-        (base / ROOT / t).mkdir(parents=True, exist_ok=True)
-    photos = base / ROOT / top / year / name / "Фотографии"
-    photos.mkdir(parents=True, exist_ok=True)
-    return photos
-
-
 def add_converted(photos: Path, code: str, name: str, size: int, nn: int,
                   jpeg: bool = True, orphan: bool = False) -> str:
     """Исходник + запись в манифесте (+ JPEG в «На выгрузку»). Возвращает sha256."""
@@ -111,23 +99,6 @@ def db(tmp_path, clock):
 @pytest.fixture
 def queue(db, clock):
     return JobQueue(db, limit=10, tz="Europe/Vienna", clock=clock)
-
-
-@pytest.fixture
-def base(tmp_path) -> Path:
-    b = tmp_path / "drive"
-    (b / ROOT).mkdir(parents=True)
-    return b
-
-
-@pytest.fixture
-def fake(base) -> FakeRclone:
-    return FakeRclone(base)
-
-
-@pytest.fixture
-def drive(fake) -> Drive:
-    return Drive("motorhof", ROOT, runner=fake)
 
 
 @pytest.fixture

@@ -146,7 +146,7 @@ def test_not_enough_space_in_tmp(base, fake, drive, workdir, listing, monkeypatc
     assert job.run("MH_1022", listing, drive, workdir, None).done == 1
 
 
-def test_corrupt_manifest_stops_without_writes(base, fake, drive, workdir, listing):
+def test_corrupt_manifest_stops_without_writes(base, fake, drive, workdir, listing, caplog):
     photos = make_car(base)
     make_jpeg(photos / "a.jpg", datetime(2026, 9, 1))
     (photos / "На выгрузку").mkdir()
@@ -156,6 +156,10 @@ def test_corrupt_manifest_stops_without_writes(base, fake, drive, workdir, listi
     assert e.value.user_text.startswith("MH_1022: файл учёта _manifest.json в папке \"На выгрузку\" повреждён.")
     assert _only_reads(fake)
     assert (photos / "На выгрузку" / "_manifest.json").read_text(encoding="utf-8") == "{not json"
+    # причина — в журнале сервера (партнёру прежний текст без неё)
+    [rec] = [r for r in caplog.records if "манифест повреждён: JSONDecodeError" in r.getMessage()]
+    assert rec.levelname == "WARNING" and "MH_1022" in rec.getMessage()
+    assert "JSONDecodeError" not in e.value.user_text
 
 
 def _writes(fake):

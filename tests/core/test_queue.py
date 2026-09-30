@@ -5,7 +5,23 @@ from datetime import datetime, timezone
 import pytest
 
 from core.db import Database
-from core.queue import JobQueue, QueueFull
+from core.queue import JobFailedQuietly, JobQueue, QueueFull
+
+
+async def _die_mid_job(q):
+    """Процесс взял задачу и «умер» посреди неё: обработчик отменяется, статус остаётся running."""
+    started = asyncio.Event()
+
+    async def hang(job):
+        started.set()
+        await asyncio.Event().wait()
+
+    q.register_kind("photos.convert", hang)
+    task = asyncio.create_task(q.run_next())
+    await asyncio.wait_for(started.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 def _enqueue(q, code, kind="photos.convert", user="Anna"):
@@ -114,30 +130,58 @@ async def test_worker_runs_handler_in_thread_and_reports_progress(db):
 
 
 async def test_one_job_at_a_time(db):
-    q = JobQueue(db)
-    active = []
-    peak = []
+    """Запущенный воркер, два обработчика, которые пересеклись бы при параллельном запуске."""
+    q = JobQueue(db, poll_interval=0.01)
+    active, peak, finished = set(), [], []
 
-    def slow(job):
-        active.append(job.id)
+    async def slow(job):
+        active.add(job.id)
         peak.append(len(active))
-        import time
-        time.sleep(0.02)
-        active.remove(job.id)
+        await asyncio.sleep(0.05)  # отдаёт event loop: второй воркер успел бы начать
+        active.discard(job.id)
+        finished.append(job.key)
 
     q.register_kind("photos.convert", slow)
-    for i in range(4):
-        _enqueue(q, f"MH_{i}")
-    done = [await q.run_next() for _ in range(5)]
-    assert [j.key for j in done if j] == ["MH_0", "MH_1", "MH_2", "MH_3"]
-    assert done[-1] is None
+    q.register_kind("photos.other", slow)
+    _enqueue(q, "MH_1")
+    _enqueue(q, "MH_2", kind="photos.other")
+    await q.start(Notes())
+    try:
+        for _ in range(300):
+            if len(finished) == 2:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await q.stop()
+    assert finished == ["MH_1", "MH_2"]
     assert max(peak) == 1
+
+
+async def test_quiet_failure_marks_failed_without_generic_text(db):
+    q = JobQueue(db)
+    notes = Notes()
+    q.set_notify(notes)
+
+    def quiet(job):
+        raise JobFailedQuietly()
+
+    def with_text(job):
+        raise JobFailedQuietly(f"{job.key}: не получилось, причина уже известна")
+
+    q.register_kind("photos.convert", quiet)
+    q.register_kind("photos.other", with_text)
+    first = _enqueue(q, "MH_1022").job_id
+    second = _enqueue(q, "MH_1040", kind="photos.other").job_id
+    await q.run_next()
+    await q.run_next()
+    assert (q.get(first).status, q.get(second).status) == ("failed", "failed")
+    assert notes.sent == [(100, "MH_1040: не получилось, причина уже известна")]
 
 
 async def test_handler_exception_marks_failed_and_notifies(db):
     q = JobQueue(db)
     notes = Notes()
-    q.notify = notes
+    q.set_notify(notes)
 
     def broken(job):
         raise ValueError("битый файл /secret/path")
@@ -171,7 +215,7 @@ async def test_restart_marks_running_as_interrupted_and_continues_queue(tmp_path
     q1 = JobQueue(db1)
     stuck = _enqueue(q1, "MH_1022").job_id
     _enqueue(q1, "MH_1040")
-    q1._claim()  # процесс взял задачу и «умер» посреди неё
+    await _die_mid_job(q1)
     db1.close()
 
     db2 = Database(path, clock=clock)
@@ -199,10 +243,10 @@ async def test_restart_marks_running_as_interrupted_and_continues_queue(tmp_path
     db2.close()
 
 
-def test_recover_interrupted_returns_jobs_and_frees_key(db):
+async def test_recover_interrupted_returns_jobs_and_frees_key(db):
     q = JobQueue(db)
     _enqueue(q, "MH_1022")
-    q._claim()
+    await _die_mid_job(q)
     jobs = q.recover_interrupted()
     assert [(j.key, j.status) for j in jobs] == [("MH_1022", "interrupted")]
     assert _enqueue(q, "MH_1022").duplicate_of is None

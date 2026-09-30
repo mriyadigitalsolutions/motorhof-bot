@@ -1,40 +1,23 @@
 """Сквозной путь /fotos → очередь → run_next → job.run на фейковом rclone → сообщения и runs."""
 import asyncio
-from pathlib import Path
+from datetime import datetime
 
 import pytest
-from PIL import Image
 
 from core.drive import Drive
 from modules.photos import handlers
 from modules.photos.handlers import KIND, make_interrupted, make_job, open_run, submit
-from tests.fakes.fake_rclone import FakeRclone
-
-ROOT = "MOTORHOF_AUTO"
-TOPS = ("MH_AUTO_НАЛИЧИЕ", "MH_AUTO_ПРОДАНО", "KO_AUTO_НАЛИЧИЕ", "KO_AUTO_ПРОДАНО")
-
-
-def jpeg(path: Path, minute: int) -> None:
-    exif = Image.Exif()
-    exif.get_ifd(0x8769)[0x9003] = f"2026:09:18 17:{minute:02d}:00"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    Image.new("RGB", (300, 200), (10, 20, 30)).save(path, "JPEG", exif=exif.tobytes())
+from tests.fakes.drive_tree import ROOT, make_car
+from tests.fakes.images import make_jpeg
 
 
 @pytest.fixture
 def base(tmp_path):
     b = tmp_path / "drive"
-    for t in TOPS:
-        (b / ROOT / t).mkdir(parents=True)
-    photos = b / ROOT / "MH_AUTO_НАЛИЧИЕ" / "2026" / "MH_1022_Mazda_2" / "Фотографии"
-    jpeg(photos / "IMG_1.JPG", 1)
-    jpeg(photos / "IMG_2.JPG", 2)
+    photos = make_car(b)
+    make_jpeg(photos / "IMG_1.JPG", datetime(2026, 9, 18, 17, 1), size=(300, 200))
+    make_jpeg(photos / "IMG_2.JPG", datetime(2026, 9, 18, 17, 2), size=(300, 200))
     return b
-
-
-@pytest.fixture
-def fake(base):
-    return FakeRclone(base)
 
 
 @pytest.fixture
@@ -43,6 +26,11 @@ def photos_kind(queue, fake, tmp_path):
     queue.register_kind(KIND, make_job(queue, drive, tmp_path / "work", secrets=["SECRET123"]),
                         on_interrupted=make_interrupted(queue.db))
     return drive
+
+
+def open_links(db):
+    """Незакрытые связи задача → запись runs (после завершения или прерывания их быть не должно)."""
+    return db.fetchall("SELECT * FROM photos_job_runs")
 
 
 def fotos(queue, args):
@@ -85,6 +73,7 @@ async def test_job_error_text_and_failed_run(queue, db, sent, photos_kind):
     [run] = db.last_runs()
     assert run["status"] == "failed"
     assert "не найдена" in run["error_text"]
+    assert open_links(db) == []
 
 
 async def test_unexpected_exception_reported(queue, db, sent, tmp_path):
@@ -100,6 +89,7 @@ async def test_unexpected_exception_reported(queue, db, sent, tmp_path):
     [run] = db.last_runs()
     assert run["status"] == "failed"
     assert "RuntimeError" in run["error_text"] and "SECRET123" not in run["error_text"]
+    assert open_links(db) == []
 
 
 async def test_interrupted_on_start_and_queue_continues(queue, db, photos_kind, sent):
@@ -119,6 +109,7 @@ async def test_interrupted_on_start_and_queue_continues(queue, db, photos_kind, 
         runs = {r["id"]: r for r in db.last_runs()}
         assert runs[own]["status"] == "interrupted" and runs[own]["finished_at"]
         assert runs[other]["status"] == "running"
+        assert open_links(db) == []
         for _ in range(200):  # воркер продолжает очередь: MH_1040 выполняется после старта
             if len(fresh) > 1:
                 break

@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Iterator, Protocol
 
 from core.drive import CarAmbiguous, CarFolder, CarNotFound, Drive, DriveError
-from core.queue import Job, JobQueue, QueueFull
+from core.queue import Job, JobFailedQuietly, JobQueue, QueueFull
 
 from .cleanup import DngSet, delete_dng, find_dng, mb
 
@@ -147,8 +147,16 @@ def expired_text(code: str, days: int) -> str:
             f"удаление не выполнено. Спрошу снова через {days} {_plural_days(days)}.")
 
 
-class DeleteFailed(Exception):
-    """Удаление не удалось; партнёру и админу уже написано — задача очереди завершается failed."""
+class DeleteFailed(JobFailedQuietly):
+    """Удаление не удалось; партнёру и админу уже написано — задача очереди завершается failed
+    без общего текста «задача упала»."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__()
+        self.code = code
+
+    def __str__(self) -> str:
+        return self.code
 
 
 def parse_data(data: str | None) -> tuple[str, int] | None:
@@ -445,10 +453,10 @@ class Reminders:
     async def _on_ok(self, req: DngRequest, user_id: int, user_name: str, access: AccessLike,
                      chat_id: int) -> None:
         try:
-            # У задачи нет адресата (chat_id и telegram_id пусты): все сообщения удаления идут
-            # через sender обоим, а общему «задача упала» от очереди некуда уйти при любом notify.
+            # Адресат задачи — чат партнёра. Итоги удаления идут через sender обоим, сбой
+            # завершается DeleteFailed (JobFailedQuietly): общий «задача упала» не шлётся.
             result = self.queue.enqueue(MODULE, KIND_DELETE, {"key": req.code, "request_id": req.id},
-                                        None, None, req.requester_name)
+                                        req.chat_id, None, req.requester_name)
         except QueueFull as e:
             await self._send(chat_id, f"Очередь переполнена ({e.limit}), попробуй позже")
             return
@@ -505,7 +513,8 @@ class Reminders:
 
     def interrupted(self, job: Job) -> str:
         """on_interrupted для KIND_DELETE: запрос устарел, машина снова idle и спрашивается на
-        ближайшей проверке. Текст — партнёру и админу через sender (у задачи нет адресата)."""
+        ближайшей проверке. Возвращённый текст очередь шлёт в чат задачи; остальным (админу)
+        — через sender."""
         req = self._request(int(job.payload.get("request_id") or 0))
         code = req.code if req else (job.key or "")
         text = interrupted_text(code)
@@ -517,7 +526,8 @@ class Reminders:
             self._update_car(req.code, state="idle", pending_request_id=None, reminded=0,
                              next_ask_at=self._now().isoformat())
         for chat_id in dict.fromkeys([req.chat_id, req.admin_id]):
-            self._send_later(chat_id, text)
+            if chat_id != job.chat_id:
+                self._send_later(chat_id, text)
         return text
 
     def _finish(self, req: DngRequest, status: str) -> None:

@@ -35,8 +35,20 @@ class Settings:
         return [s for s in (self.telegram_bot_token,) if s]
 
 
+_COMMENT = re.compile(r"(^|\s)#")
+
+
+def _clean(raw: str) -> str:
+    """Значение без комментария: в кавычках берётся как есть, иначе режется с « #»."""
+    value = raw.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        return value[1:-1]
+    match = _COMMENT.search(value)
+    return value[: match.start()].strip() if match else value
+
+
 def _str(env: Mapping[str, str], name: str, default: str) -> str:
-    value = (env.get(name) or "").split("#", 1)[0].strip()
+    value = _clean(env.get(name) or "")
     return value or default
 
 

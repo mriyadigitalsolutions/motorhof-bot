@@ -11,7 +11,7 @@ import modules.photos as photos
 from core.settings import load_settings
 from modules.photos import handlers
 from modules.photos.job import Report
-from tests.photos_reminders.conftest import ADMIN, MB, PARTNER, Access, add_converted, car_dir
+from tests.photos_reminders.conftest import ADMIN, MB, PARTNER, Access, add_converted, make_car
 
 
 def _settings(tmp_path, **kw):
@@ -19,7 +19,7 @@ def _settings(tmp_path, **kw):
 
 
 async def test_register_wires_night_check_buttons_and_delete(base, queue, drive, clock, outbox, tmp_path):
-    photos_dir = car_dir(base)
+    photos_dir = make_car(base)
     add_converted(photos_dir, "MH_1022", "IMG_1.DNG", MB, 1)
     router = Router()
     service = photos.register(router, queue, settings=_settings(tmp_path, daily_check_time="03:00"),
@@ -75,7 +75,7 @@ def _callback(data: str, user_id: int, bot) -> CallbackQuery:
 
 
 async def test_callback_goes_through_make_buttons_to_press(base, service, queue, clock, outbox):
-    photos_dir = car_dir(base)
+    photos_dir = make_car(base)
     add_converted(photos_dir, "MH_1022", "IMG_1.DNG", MB, 1)
     service.record_done("MH_1022", PARTNER, PARTNER)
     clock.advance(days=60)
@@ -92,7 +92,7 @@ async def test_callback_goes_through_make_buttons_to_press(base, service, queue,
 
 
 async def test_callback_without_access_logs_error_not_no_admin(base, service, clock, outbox, caplog):
-    photos_dir = car_dir(base)
+    photos_dir = make_car(base)
     add_converted(photos_dir, "MH_1022", "IMG_1.DNG", MB, 1)
     service.record_done("MH_1022", PARTNER, PARTNER)
     clock.advance(days=60)

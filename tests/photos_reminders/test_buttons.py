@@ -10,7 +10,7 @@ import pytest
 from modules.photos.manifest import MANIFEST_NAME, Manifest
 from modules.photos.reminders import KIND_DELETE
 from tests.photos_reminders.conftest import (
-    ADMIN, MB, OTHER, PARTNER, Access, add_converted, car_dir,
+    ADMIN, MB, OTHER, PARTNER, Access, add_converted, make_car,
 )
 
 
@@ -18,7 +18,7 @@ from tests.photos_reminders.conftest import (
 def asked(base, service, queue, clock, outbox):
     """Машина с двумя DNG (1 и 2 МБ) и одним HEIC; вопрос партнёру уже задан."""
     queue.register_kind(KIND_DELETE, service.run_delete, on_interrupted=service.interrupted)
-    photos = car_dir(base)
+    photos = make_car(base)
     add_converted(photos, "MH_1022", "IMG_1.DNG", MB, 1)
     add_converted(photos, "MH_1022", "IMG_2.DNG", 2 * MB, 2)
     add_converted(photos, "MH_1022", "IMG_3.HEIC", MB, 3)
@@ -178,6 +178,7 @@ async def test_delete_failure_tells_both(asked, service, queue, fake, outbox):
     buttons = await _ask(service, outbox)
     await service.press(buttons["Удалить"], PARTNER, "Анна", Access())
     await service.press(dict(outbox.buttons(ADMIN))["Подтвердить"], ADMIN, "Админ", Access())
+    queue.set_notify(_bot_notify(outbox))
     fake.fail("deletefile", stderr="ERROR : quota exceeded")
     outbox.messages.clear()
     await queue.run_next()
@@ -201,17 +202,18 @@ async def test_interrupted_delete_returns_to_idle_and_tells_both(asked, service,
 
     async def notify(job, text):
         notified.append((job.chat_id, text))
+        await outbox(job.chat_id, text)
 
     service.set_sender(None)  # как в боте: recover идёт до startup, отправки ещё нет
     await queue.start(notify)
     await queue.stop()
     await asyncio.sleep(0)
     text = "MH_1022: удаление DNG прервано перезапуском сервера, спрошу снова."
-    assert outbox.messages == []
+    assert notified == [(PARTNER, text)]  # партнёру — через notify очереди, сразу
+    assert outbox.to(ADMIN) == []
     service.set_sender(outbox)  # startup бота
     await asyncio.sleep(0)
-    assert outbox.to(PARTNER) == [text] and outbox.to(ADMIN) == [text]
-    assert all(chat is None for chat, _ in notified)  # общий notify очереди никому не пишет
+    assert outbox.to(PARTNER) == [text] and outbox.to(ADMIN) == [text]  # по одному разу
     assert service.state("MH_1022") == "idle"
     outbox.messages.clear()
     await service.press(ok, ADMIN, "Админ", Access())
@@ -252,11 +254,11 @@ async def test_fotos_resets_pending_admin(asked, service, queue, outbox):
     assert outbox.to(ADMIN) == ["Запрос устарел"] and queue.status().queued == []
 
 
-def _leaky_notify(outbox):
-    """notify, который НЕ пропускает задачи без чата: пишет в chat_id или telegram_id задачи."""
+def _bot_notify(outbox):
+    """notify как у бота: сообщение в job.chat_id, задачи без чата пропускаются."""
     async def notify(job, text):
-        target = job.chat_id if job.chat_id is not None else job.telegram_id
-        await outbox(target, text)
+        if job.chat_id is not None:
+            await outbox(job.chat_id, text)
     return notify
 
 
@@ -265,7 +267,7 @@ async def test_drive_error_on_find_car_fails_request_and_tells_both(asked, servi
     buttons = await _ask(service, outbox)
     await service.press(buttons["Удалить"], PARTNER, "Анна", Access())
     await service.press(dict(outbox.buttons(ADMIN))["Подтвердить"], ADMIN, "Админ", Access())
-    queue.notify = _leaky_notify(outbox)
+    queue.set_notify(_bot_notify(outbox))
     fake.fail("lsjson", stderr="ERROR : connection reset")
     outbox.messages.clear()
     await queue.run_next()
@@ -285,10 +287,11 @@ async def test_failure_generic_queue_text_reaches_nobody_even_if_notify_sends(
     buttons = await _ask(service, outbox)
     await service.press(buttons["Удалить"], PARTNER, "Анна", Access())
     await service.press(dict(outbox.buttons(ADMIN))["Подтвердить"], ADMIN, "Админ", Access())
-    queue.notify = _leaky_notify(outbox)
+    queue.set_notify(_bot_notify(outbox))
     fake.fail("deletefile", stderr="ERROR : quota exceeded")
     outbox.messages.clear()
     await queue.run_next()
     assert queue.get(1).status == "failed"
+    assert queue.get(1).chat_id == PARTNER  # у задачи удаления снова есть адресат
     assert len(outbox.to(PARTNER)) == 1 and len(outbox.to(ADMIN)) == 1
     assert not any("задача упала" in t for c, t, _ in outbox.messages if c is not None)

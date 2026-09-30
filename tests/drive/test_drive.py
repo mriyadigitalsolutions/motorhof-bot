@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 
 from core.drive import CarAmbiguous, CarNotFound, Drive, DriveError
-from tests.drive.conftest import make_car
+from tests.fakes.drive_tree import make_car
 
 
 @pytest.mark.parametrize(

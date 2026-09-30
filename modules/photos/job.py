@@ -201,6 +201,7 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
     try:
         manifest = Manifest.load(manifest_local, mh=code)
     except ManifestCorrupt as e:
+        log.warning("%s: %s не принят: %s", code, MANIFEST_NAME, e)
         raise ManifestBroken(
             f'{code}: файл учёта {MANIFEST_NAME} в папке "{drive.output_subdir}" повреждён. '
             "Удали или исправь его — бот не будет перезаписывать папку вслепую."

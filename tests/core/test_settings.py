@@ -72,3 +72,18 @@ def test_broken_id_list_gives_empty_set():
     assert load_settings({"ALLOWED_TELEGRAM_IDS": "abc,;;"}).allowed_telegram_ids == frozenset()
     assert load_settings({"ALLOWED_TELEGRAM_IDS": ""}).allowed_telegram_ids == frozenset()
     assert load_settings({}).allowed_telegram_ids == frozenset()
+
+
+def test_hash_inside_value_is_kept_and_spaced_comment_is_cut():
+    s = load_settings({
+        "QUEUE_LIMIT": "10   # комментарий",
+        "TMP_DIR": "/data/a#b",
+        "OUTPUT_SUBDIR": "На выгрузку #2",
+        "SOURCE_SUBDIR": '"Фото #1"',
+        "DRIVE_ROOT": "'root # x'",
+    })
+    assert s.queue_limit == 10
+    assert s.tmp_dir == Path("/data/a#b")
+    assert s.output_subdir == "На выгрузку"
+    assert s.source_subdir == "Фото #1"
+    assert s.drive_root == "root # x"

@@ -6,7 +6,7 @@ import shutil
 import pytest
 
 from core.drive import Drive, DriveError, subprocess_runner
-from tests.drive.conftest import ROOT, make_car
+from tests.fakes.drive_tree import ROOT, make_car
 
 pytestmark = pytest.mark.skipif(shutil.which("rclone") is None, reason="rclone не установлен")
 

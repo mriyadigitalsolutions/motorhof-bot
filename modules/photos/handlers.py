@@ -119,13 +119,22 @@ def select_variants(all_variants: dict[str, Variant], extra: list[str]) -> list[
     return [v for v in all_variants.values() if not v.on_demand or v.name in extra]
 
 
-def open_run(db: Database, job: Job) -> int:
-    """Открывает запись runs для задачи и запоминает её run_id."""
+def ensure_schema(db: Database) -> None:
+    """Таблица модуля photos_job_runs; вызывается один раз — при регистрации задачи (make_job)."""
     db.ensure_schema(SCHEMA)
+
+
+def open_run(db: Database, job: Job) -> int:
+    """Открывает запись runs для задачи и запоминает её run_id (схема уже создана make_job)."""
     run_id = db.record_run_start(job.key or "", job.telegram_id, job.user_name)
     db.execute("INSERT OR REPLACE INTO photos_job_runs (job_id, run_id) VALUES (?, ?)",
                (job.id, run_id))
     return run_id
+
+
+def _close_link(db: Database, job_id: int) -> None:
+    """Задача завершена или прервана — связь задача → runs больше не нужна."""
+    db.execute("DELETE FROM photos_job_runs WHERE job_id = ?", (job_id,))
 
 
 def make_job(queue: JobQueue, drive: Drive, workdir: Path,
@@ -138,12 +147,18 @@ def make_job(queue: JobQueue, drive: Drive, workdir: Path,
     on_done(code, telegram_id, chat_id) — после успешной конвертации (не пустой папки):
     машина запоминается для напоминания об удалении DNG."""
     db: Database = queue.db
-    db.ensure_schema(SCHEMA)
+    ensure_schema(db)
     run = run or job_mod.run
 
     def handle(job: Job) -> str:
-        code = job.key or ""
         run_id = open_run(db, job)
+        try:
+            return _handle(job, run_id)
+        finally:
+            _close_link(db, job.id)
+
+    def _handle(job: Job, run_id: int) -> str:
+        code = job.key or ""
         try:
             variants = select_variants(variants_loader(), list(job.payload.get("variants") or []))
             report = run(
@@ -174,15 +189,15 @@ def make_job(queue: JobQueue, drive: Drive, workdir: Path,
 
 
 def make_interrupted(db: Database):
-    """Текст партнёру о задаче, прерванной перезапуском; заодно закрывает её запись в runs."""
-
-    db.ensure_schema(SCHEMA)
+    """Текст партнёру о задаче, прерванной перезапуском; заодно закрывает её запись в runs.
+    Регистрируется вместе с make_job — схему создаёт он."""
 
     def interrupted_text(job: Job) -> str:
         code = job.key or ""
         row = db.fetchone("SELECT run_id FROM photos_job_runs WHERE job_id = ?", (job.id,))
         if row is not None:
             db.record_run_finish(row["run_id"], "interrupted")
+            _close_link(db, job.id)
         return (f"{code}: задача прервана перезапуском сервера. Запусти /fotos {code} ещё раз — "
                 "сделанное не пересчитается.")
 

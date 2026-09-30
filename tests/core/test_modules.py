@@ -35,7 +35,7 @@ async def test_template_job_runs_through_queue(db):
     async def notify(job, text):
         sent.append(text)
 
-    queue.notify = notify
+    queue.set_notify(notify)
     queue.enqueue("_template", "_template.echo", {"key": "MH_1022"}, 1, 1, "A")
     job = await queue.run_next()
     assert job.status == "done"

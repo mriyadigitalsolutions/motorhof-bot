@@ -109,3 +109,22 @@ def test_number_fixed_only_for_converted_source(tmp_path):
     shutil.copy(good_b, src / "B.JPG")  # исправленный B
     rep2 = run_local(src, out, "MH_1022")
     assert rep2.rendered == ["MH_1022_03.jpg"]
+
+
+def test_exit_code_2_only_for_bad_arguments(tmp_path, monkeypatch):
+    import pytest
+
+    from modules.photos import __main__ as cli
+
+    src, out = tmp_path / "in", tmp_path / "out"
+    src.mkdir()
+    base = ["--in", str(src), "--out", str(out), "--mh", "MH_1022"]
+    assert cli.main(base + ["--variant", "nope"]) == 2  # неизвестный вариант — ошибка аргументов
+    assert cli.main(["MH_1022", "nope"]) == 2
+
+    def broken(*a, **kw):
+        raise ValueError("сбой внутри конвертации")
+
+    monkeypatch.setattr(cli, "run_local", broken)
+    with pytest.raises(ValueError, match="сбой внутри"):  # не маскируется под код 2
+        cli.main(base)
