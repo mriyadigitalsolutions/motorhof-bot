@@ -130,11 +130,12 @@ rclone v1.71.1 для `linux-amd64` из официального релиза G
    `docker compose exec photos python -m modules.photos MH_1022` (с `full` — плюс полноразмерные).
    Печатает отчёт; код выхода 0 — готово, 1 — ошибка задачи, 2 — ошибка аргументов, 3 — манифест повреждён.
 3. Reboot-тест: `sudo reboot`, после загрузки `/status` в Telegram должен ответить сам.
-4. Секреты не попали в git: `git log -p --all | grep -nE '[0-9]{8,10}:[A-Za-z0-9_-]{35}|refresh_token|access_token|client_secret'`
-   должен ничего не вывести (первое — формат токена Telegram), и
-   `git log --all --name-only --format= | grep -E '(^|/)(\.env|rclone\.conf)'` — тоже пусто
-   (`.env.example` допустим). Нашлось — токен перевыпустить (BotFather `/revoke`, заново
-   `rclone config`), историю не «чинить» молча.
+4. Секреты не попали в git (PLAN §8, пре-деплой):
+   `git log -p --all -- . ':(exclude)tests' ':(exclude).autopilot' | grep -nE '[0-9]{8,10}:[A-Za-z0-9_-]{35}|ya29\.|1//0|GOCSPX-'`
+   должен ничего не вывести (токен Telegram, access/refresh-токен Google, секрет OAuth-клиента;
+   в `tests/` и `.autopilot/` лежат заведомо фальшивые примеры для фильтра логов, их и исключаем), и
+   `git log --all --name-only --format= | grep -E '(^|/)(\.env|rclone\.conf)'` — только `.env.example`.
+   Нашлось — токен перевыпустить (BotFather `/revoke`, заново `rclone config`), историю не «чинить» молча.
 5. После приёмки (всё выше прошло, партнёры проверили фото): `git tag v1.0 && git push origin v1.0`,
    ссылку на репозиторий записать в документацию проекта.
 6. Локальная конвертация без Drive (на своей машине или в контейнере):
@@ -200,5 +201,6 @@ python -m pytest -q
 rclone в `PATH` нужен для части интеграционных тестов (Drive подменяется фейком поверх локальной
 папки, настоящий remote не нужен). Тесты на реальных снимках берут `tests/fixtures/IMG_4079.HEIC`
 и `tests/fixtures/IMG_4561.DNG`; их нет в git — без них такие тесты пропускаются.
-Образ Docker в тестах не собирается: `tests/test_packaging.py` проверяет, что `Dockerfile`,
-`docker-compose.yml`, `.env.example` согласованы с `core/settings.py`.
+Образ бота в тестах не собирается: `tests/test_packaging.py` проверяет, что `Dockerfile`,
+`docker-compose.yml`, `.env.example` согласованы с `core/settings.py`, а `.dockerignore` — и разбором
+правил, и настоящим `docker build` крошечного образа `FROM scratch` (если демона Docker нет — пропуск).

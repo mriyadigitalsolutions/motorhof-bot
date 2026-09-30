@@ -1,5 +1,6 @@
 """Упаковка: Dockerfile, docker-compose.yml, .env.example, .dockerignore, README согласованы
-с core.settings. Образ здесь не собирается (нет демона Docker) — проверяем файлы статически."""
+с core.settings. Образ бота не собирается (apt/pip за прокси) — файлы проверяются статически;
+.dockerignore дополнительно проверяется настоящим docker build контекста, если демон доступен."""
 from __future__ import annotations
 
 import dataclasses
