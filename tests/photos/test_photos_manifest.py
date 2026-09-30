@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+import time
+from datetime import datetime, timezone
 
 import pytest
 
@@ -135,3 +136,23 @@ def test_corrupt_or_foreign_manifest(tmp_path, content):
     path.write_text(content)
     with pytest.raises(ManifestCorrupt):
         Manifest.load(path, mh="MH_1022")
+
+
+@pytest.fixture
+def vienna_tz(monkeypatch):
+    """Процесс в TZ Europe/Vienna (UTC+2 в сентябре), чтобы UTC и местное время различались."""
+    monkeypatch.setenv("TZ", "Europe/Vienna")
+    time.tzset()
+    yield
+    monkeypatch.undo()
+    time.tzset()
+
+
+def test_mtime_compared_with_taken_in_local_time(vienna_tz):
+    m = Manifest.load(None, mh="MH_1022")
+    shot = Source("SHOT.HEIC", "s", taken=datetime(2026, 9, 4, 12, 0, 0))  # местное время съёмки
+    # файлы изменены в 12:30 по Вене (10:30 UTC) — позже снимка
+    as_float = Source("F.JPG", "f", mtime=datetime(2026, 9, 4, 12, 30, 0).timestamp())
+    as_aware = Source("A.JPG", "a", mtime=datetime(2026, 9, 4, 10, 30, 0, tzinfo=timezone.utc))
+    plan = m.plan([as_float, as_aware, shot], [LISTING], set())
+    assert [i.source.name for i in plan.to_render] == ["SHOT.HEIC", "A.JPG", "F.JPG"]

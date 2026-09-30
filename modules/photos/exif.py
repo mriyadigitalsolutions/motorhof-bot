@@ -9,6 +9,7 @@ EXIF_IFD = 0x8769
 GPS_IFD = 0x8825
 
 MAKE, MODEL, ORIENTATION = 0x010F, 0x0110, 0x0112
+DATETIME = 0x0132  # IFD0 DateTime — запасная дата, если нет DateTimeOriginal
 DATETIME_ORIGINAL, OFFSET_TIME_ORIGINAL = 0x9003, 0x9011
 
 # Теги основного IFD0, которые переносим
@@ -45,7 +46,7 @@ def taken(src: Image.Exif | None) -> datetime | None:
     """DateTimeOriginal (или DateTime из IFD0, если его нет) как наивное локальное время съёмки."""
     if src is None:
         return None
-    raw = src.get_ifd(EXIF_IFD).get(DATETIME_ORIGINAL) or src.get(0x0132)
+    raw = src.get_ifd(EXIF_IFD).get(DATETIME_ORIGINAL) or src.get(DATETIME)
     if not isinstance(raw, str):
         return None
     try:

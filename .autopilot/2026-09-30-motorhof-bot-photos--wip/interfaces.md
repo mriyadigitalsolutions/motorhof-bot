@@ -64,3 +64,5 @@
 - Очередь НЕ пишет `runs` — журнал запусков пишет модуль (photos), error_text через `redact`.
 - `modules`: `ENABLED: list[str]` (= ["photos"]), `register_all(router, queue, names=None)`; шаблон `modules/_template/` (команда /template, kind `_template.echo`, `handlers.submit(queue, arg, chat_id, telegram_id, user_name) -> str`)
 - Тесты: `/home/user/venv-motorhof/bin/python -m pytest -q`; `tests/core/`
+- (доработка 03) `convert.UNREADABLE = "файл повреждён или не читается"` — любой нечитаемый исходник → `ConvertError(UNREADABLE)`; `exif.DATETIME = 0x0132`; `naming.sort_key` сравнивает всё в наивном местном времени процесса.
+- (доработка 03) **Рендерить через** `Manifest.execute(sources, variants, existing_outputs, render: Callable[[RenderItem], None]) -> Execution(first_plan, plan, done, errors[(имя, причина)])` — render бросает `ConvertError` → исходник исключается, план пересчитывается, дыр в номерах нет. Голую пару plan/apply для рендера не использовать. `run_local` уже на `execute`.

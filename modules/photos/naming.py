@@ -1,7 +1,7 @@
 """Имена выходных файлов и порядок нумерации исходников."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Protocol
 
 
@@ -17,11 +17,14 @@ def out_name(mh: str, nn: int, suffix: str = "") -> str:
 
 
 def _naive(value: datetime | float | None) -> datetime:
+    """Всё к наивному местному времени (TZ процесса) — в той же базе, что DateTimeOriginal."""
     if value is None:
         return datetime.max
     if isinstance(value, (int, float)):
-        value = datetime.fromtimestamp(value, tz=timezone.utc)
-    return value.replace(tzinfo=None)
+        return datetime.fromtimestamp(value)  # POSIX-время → местное
+    if value.tzinfo is not None:
+        return value.astimezone().replace(tzinfo=None)  # например, UTC от Drive → местное
+    return value
 
 
 def sort_key(src: _Dated) -> tuple[datetime, str]:

@@ -11,7 +11,8 @@ from pathlib import Path
 from PIL import Image
 
 from modules.photos.__main__ import format_report, run_local
-from tests.photos.conftest import DNG_FIXTURE, HEIC_FIXTURE, make_jpeg, needs_dng, needs_heic
+from tests.photos.conftest import (DNG_FIXTURE, HEIC_FIXTURE, jpeg_bytes_truncated, make_jpeg,
+                                   needs_dng, needs_heic)
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -35,6 +36,7 @@ def test_local_run_idempotent_and_reports_broken(tmp_path):
     assert Image.open(out / "MH_1022_01.jpg").size == (1200, 800)   # IMG_1 раньше по дате
     text = format_report(rep)
     assert "IMG_4100.HEIC — файл повреждён или не читается" in text
+    assert text.splitlines()[-1] == "Ошибки: IMG_4100.HEIC — файл повреждён или не читается"
     assert "2 новых" in text
     data = json.loads((out / "_manifest.json").read_text())
     assert {f["src"]: f["out"] for f in data["files"]} == {"IMG_1.jpeg": "MH_1022_01.jpg",
@@ -89,3 +91,21 @@ def test_cli_on_fixtures(tmp_path):
     assert {f["src"]: f["out"] for f in data["files"]} == {"IMG_4561.DNG": "MH_1022_01.jpg",
                                                             "IMG_4079.HEIC": "MH_1022_02.jpg"}
     assert all(max(Image.open(out / n).size) == 2000 for n in ("MH_1022_01.jpg", "MH_1022_02.jpg"))
+
+
+def test_number_fixed_only_for_converted_source(tmp_path):
+    src, out = tmp_path / "in", tmp_path / "out"
+    src.mkdir()
+    make_jpeg(src / "A.JPG", taken=datetime(2026, 9, 1, 10, 0, 0))
+    good_b = make_jpeg(tmp_path / "B_good.JPG", taken=datetime(2026, 9, 2, 10, 0, 0))
+    # заголовок и EXIF целы (порядок читается), пиксели обрезаны
+    (src / "B.JPG").write_bytes(jpeg_bytes_truncated(good_b))
+    make_jpeg(src / "C.JPG", taken=datetime(2026, 9, 3, 10, 0, 0))
+    rep = run_local(src, out, "MH_1022")
+    assert sorted(rep.rendered) == ["MH_1022_01.jpg", "MH_1022_02.jpg"]
+    assert "B.JPG — файл повреждён или не читается" in format_report(rep)
+    outs = {f["src"]: f["out"] for f in json.loads((out / "_manifest.json").read_text())["files"]}
+    assert outs == {"A.JPG": "MH_1022_01.jpg", "C.JPG": "MH_1022_02.jpg"}
+    shutil.copy(good_b, src / "B.JPG")  # исправленный B
+    rep2 = run_local(src, out, "MH_1022")
+    assert rep2.rendered == ["MH_1022_03.jpg"]

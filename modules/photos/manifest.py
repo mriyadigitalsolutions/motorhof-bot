@@ -10,9 +10,9 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Iterable, NamedTuple
+from typing import Callable, Iterable, NamedTuple
 
-from .convert import Variant
+from .convert import ConvertError, Variant
 from .naming import order, out_name
 
 VERSION = 1
@@ -45,6 +45,14 @@ class Plan:
     orphans: list[str] = field(default_factory=list)            # все осиротевшие выходы
     new_orphans: list[str] = field(default_factory=list)        # осиротели в этом запуске
     duplicates: list[Source] = field(default_factory=list)      # тот же sha256 под другим именем
+
+
+@dataclass
+class Execution:
+    first_plan: Plan                                            # план до рендера (skipped, new_orphans)
+    plan: Plan                                                  # последний план (orphans)
+    done: list[RenderItem] = field(default_factory=list)
+    errors: list[tuple[str, str]] = field(default_factory=list)  # (имя исходника, причина)
 
 
 class Manifest:
@@ -149,3 +157,37 @@ class Manifest:
                 "src_deleted": entry.get("src_deleted", False),
             })
         self.updated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    def execute(self, sources: Iterable[Source], variants: Iterable[Variant] | dict,
+                existing_outputs: set[str], render: Callable[[RenderItem], None]) -> Execution:
+        """План + рендер с закреплением номера только за успешно сконвертированным исходником.
+
+        render(item) пишет файл item.out_name или бросает ConvertError. Если не удался новый
+        исходник (номера у него ещё нет), он исключается и план пересчитывается — дыр в NN нет.
+        """
+        sources = list(sources)
+        existing = set(existing_outputs)
+        failed: dict[str, tuple[str, str]] = {}  # sha256 → (имя, причина)
+        done: list[RenderItem] = []
+        first: Plan | None = None
+        while True:
+            plan = self.plan([s for s in sources if s.sha256 not in failed], variants, existing)
+            first = first or plan
+            restart = False
+            for item in plan.to_render:
+                sha = item.source.sha256
+                if sha in failed:
+                    continue
+                try:
+                    render(item)
+                except ConvertError as e:
+                    failed[sha] = (item.source.name, str(e))
+                    if self._nn_of(sha) is None:  # номер ещё не закреплён — пересчитать план
+                        restart = True
+                        break
+                    continue
+                self.apply([item])
+                existing.add(item.out_name)
+                done.append(item)
+            if not restart:
+                return Execution(first, plan, done, list(failed.values()))

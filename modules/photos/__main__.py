@@ -67,29 +67,20 @@ def run_local(in_dir: Path, out_dir: Path, mh: str, extra_variants: list[str] | 
     for stale in out_dir.glob("*.part"):  # остатки прерванного запуска
         stale.unlink()
     existing = {p.name for p in out_dir.iterdir() if p.is_file()}
-    plan = manifest.plan(sources, variants, existing)
-    report.orphans = plan.orphans
+    def render(item) -> None:
+        to_jpeg(in_dir / item.source.name, item.variant, out_dir / item.out_name)
 
-    done, failed = [], set()
-    for item in plan.to_render:
-        if item.source.sha256 in failed:
-            continue
-        try:
-            to_jpeg(in_dir / item.source.name, item.variant, out_dir / item.out_name)
-        except ConvertError as e:
-            failed.add(item.source.sha256)
-            report.errors.append((item.source.name, str(e)))
-            continue
-        done.append(item)
-        report.rendered.append(item.out_name)
-    manifest.apply(done)
-    manifest.dump(manifest_path)
+    ex = manifest.execute(sources, variants, existing, render)
+    manifest.dump(manifest_path)  # манифест — последним, после всех JPEG
 
-    rendered_shas = {i.source.sha256 for i in done}
-    planned_shas = {i.source.sha256 for i in plan.to_render}
+    report.orphans = ex.plan.orphans
+    report.errors.extend(ex.errors)
+    report.rendered = [i.out_name for i in ex.done]
+    rendered_shas = {i.source.sha256 for i in ex.done}
+    planned_shas = {i.source.sha256 for i in ex.first_plan.to_render}
     report.new = len({s for s in rendered_shas if s not in known})
     report.redone = len({s for s in rendered_shas if s in known})
-    report.skipped = len({i.source.sha256 for i in plan.skipped} - planned_shas)
+    report.skipped = len({i.source.sha256 for i in ex.first_plan.skipped} - planned_shas)
     return report
 
 

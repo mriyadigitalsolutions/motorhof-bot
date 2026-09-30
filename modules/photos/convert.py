@@ -28,6 +28,9 @@ _SRGB = ImageCms.createProfile("sRGB")
 _SRGB_BYTES = ImageCms.ImageCmsProfile(_SRGB).tobytes()
 
 
+UNREADABLE = "файл повреждён или не читается"
+
+
 class ConvertError(Exception):
     """Исходник не читается или не конвертируется; сообщение — причина для отчёта."""
 
@@ -93,7 +96,7 @@ def read_meta(src: Path) -> ImageMeta:
         with Image.open(src) as im:
             return _meta(_load_exif(im), im.size)
     except Exception as e:  # noqa: BLE001 — любая ошибка чтения = файл повреждён
-        raise ConvertError(f"файл повреждён или не читается ({type(e).__name__})") from e
+        raise ConvertError(UNREADABLE) from e
 
 
 def _to_srgb(im: Image.Image) -> Image.Image:
@@ -130,16 +133,16 @@ def _check_isobmff(src: Path) -> None:
             f.seek(pos)
             head = f.read(16)
             if len(head) < 8:
-                raise ConvertError("файл обрезан")
+                raise ConvertError(UNREADABLE)
             box = int.from_bytes(head[:4], "big")
             if box == 1:
                 if len(head) < 16:
-                    raise ConvertError("файл обрезан")
+                    raise ConvertError(UNREADABLE)
                 box = int.from_bytes(head[8:16], "big")
             elif box == 0:
                 box = size - pos  # до конца файла
             if box < 8 or pos + box > size:
-                raise ConvertError("файл обрезан")
+                raise ConvertError(UNREADABLE)
             pos += box
 
 
@@ -184,7 +187,7 @@ def to_jpeg(src: Path, variant: Variant, dst: Path) -> ImageMeta:
     except ConvertError:
         raise
     except Exception as e:  # noqa: BLE001 — любая ошибка декодера = файл повреждён
-        raise ConvertError(f"файл повреждён или не читается ({type(e).__name__})") from e
+        raise ConvertError(UNREADABLE) from e
     part = dst.with_name(dst.name + ".part")
     try:
         img.save(part, "JPEG", quality=variant.quality, subsampling=variant.subsampling,

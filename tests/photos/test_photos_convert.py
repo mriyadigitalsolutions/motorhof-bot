@@ -156,6 +156,28 @@ def test_broken_source_raises_and_leaves_nothing(tmp_path, kind):
         src.write_bytes(HEIC_FIXTURE.read_bytes()[:300_000])
     out_dir = tmp_path / "out"
     out_dir.mkdir()
-    with pytest.raises(ConvertError):
+    with pytest.raises(ConvertError) as err:
         to_jpeg(src, LISTING, out_dir / "MH_1022_01.jpg")
+    assert str(err.value) == "файл повреждён или не читается"
     assert list(out_dir.iterdir()) == []
+
+
+def test_failed_save_keeps_previous_dst_and_leaves_no_part(tmp_path, monkeypatch):
+    src = make_jpeg(tmp_path / "IMG_1.JPG", size=(800, 600))
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    dst = out_dir / "MH_1022_01.jpg"
+    dst.write_bytes(b"previous-good-jpeg")
+    real_save = Image.Image.save
+
+    def save_half_then_fail(self, fp, format=None, **params):
+        buf = io.BytesIO()
+        real_save(self, buf, format, **params)
+        Path(fp).write_bytes(buf.getvalue()[: len(buf.getvalue()) // 2])
+        raise OSError("диск отвалился посреди записи")
+
+    monkeypatch.setattr(Image.Image, "save", save_half_then_fail)
+    with pytest.raises(ConvertError):
+        to_jpeg(src, LISTING, dst)
+    assert dst.read_bytes() == b"previous-good-jpeg"
+    assert [p.name for p in out_dir.iterdir()] == ["MH_1022_01.jpg"]
