@@ -34,11 +34,11 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-# data/ приходит volume'ом (./data), конфиг rclone — файлом (./rclone.conf)
+# data/ приходит volume'ом (./data), конфиг rclone — каталогом (./rclone/rclone.conf)
 ENV RCLONE_CONFIG=/config/rclone/rclone.conf
 RUN mkdir -p /app/data /config/rclone
 
-# Процесс работает от root: ./data Docker создаёт на хосте от root, а rclone.conf после
+# Процесс работает от root: ./data Docker создаёт на хосте от root, а rclone/rclone.conf после
 # `rclone config` принадлежит root с правами 0600 — непривилегированный пользователь не смог бы
 # ни писать базу, ни обновлять токен. Контейнер наружу портов не открывает.
 

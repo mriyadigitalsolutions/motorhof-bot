@@ -1,5 +1,5 @@
 # motorhof-bot: один сервис. Запуск и обновление: git pull && docker compose up -d --build
-# Секреты здесь не пишем: они в .env (env_file) и в rclone.conf (volume).
+# Секреты здесь не пишем: они в .env (env_file) и в rclone/rclone.conf (volume).
 services:
   photos:
     build: .
@@ -11,8 +11,9 @@ services:
     volumes:
       # SQLite (очередь, журнал) и временные файлы; пути TMP_DIR и DB_PATH из .env лежат здесь
       - ./data:/app/data
-      # конфиг rclone на запись: rclone обновляет в нём OAuth-токен
-      - ./rclone.conf:/config/rclone/rclone.conf
+      # каталог с rclone.conf на запись: rclone сохраняет обновлённый OAuth-токен
+      # переименованием файла, а смонтированный отдельно файл переименовать нельзя
+      - ./rclone:/config/rclone
     logging:
       driver: json-file
       options:

@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 rclone.conf
+rclone
 # Данные сервиса приходят volume'ом
 data
 # Сборка, служебное, тесты с тяжёлыми фикстурами

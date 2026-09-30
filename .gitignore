@@ -1,5 +1,6 @@
 .env
 rclone.conf
+rclone/
 data/
 tests/fixtures/*.DNG
 tests/fixtures/*.dng

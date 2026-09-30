@@ -23,6 +23,7 @@ modules/        __init__.py — список включённых модулей
   _template/    заготовка нового модуля
 tests/          pytest; fixtures/ — реальные снимки (в git не лежат), fakes/ — фейковый rclone
 data/           volume: SQLite (очередь, журнал) и временные файлы; в git не лежит
+rclone/         volume: rclone.conf (кладётся руками на сервере); в git не лежит
 Dockerfile, docker-compose.yml, .env.example
 ```
 
@@ -37,9 +38,10 @@ Dockerfile, docker-compose.yml, .env.example
    `office@motorhof.at`, на вопрос про общий диск — да (`team_drive`), выбрать диск MOTORHOF.
    Проверка: `rclone lsd motorhof:MOTORHOF_AUTO` — должны быть видны `MH_AUTO_НАЛИЧИЕ`,
    `MH_AUTO_ПРОДАНО`, `KO_AUTO_НАЛИЧИЕ`, `KO_AUTO_ПРОДАНО`.
-   Затем положить конфиг в папку проекта: `cp ~/.config/rclone/rclone.conf ./rclone.conf`.
-   Файл должен существовать **до** первого запуска — иначе Docker создаст на его месте пустую папку.
-6. `cp .env.example .env` и вписать значения (см. ниже). `.env` и `rclone.conf` в `.gitignore`,
+   Затем положить конфиг в папку проекта: `mkdir -p rclone && cp ~/.config/rclone/rclone.conf rclone/rclone.conf`.
+   Монтируется каталог `rclone/`, а не сам файл: rclone сохраняет обновлённый токен переименованием
+   файла, а смонтированный отдельно файл переименовать нельзя.
+6. `cp .env.example .env` и вписать значения (см. ниже). `.env` и `rclone/` в `.gitignore`,
    в образ не попадают (`.dockerignore`), их содержимое никуда не печатать.
 7. Запуск: `docker compose up -d --build`, затем в Telegram `/status`.
 
@@ -80,8 +82,7 @@ Dockerfile, docker-compose.yml, .env.example
 Контейнер: `python:3.12-slim`, `LANG=C.UTF-8` (кириллица в путях Drive), `TZ=Europe/Vienna`,
 rclone v1.71.1 из официального релиза GitHub (проверка контрольной суммы и `rclone version` при сборке).
 `docker-compose.yml`: один сервис `photos`, `restart: unless-stopped`, `env_file: .env`, volumes
-`./data:/app/data` и `./rclone.conf:/config/rclone/rclone.conf` (на запись), `RCLONE_CONFIG`
-указывает на него. Процесс в контейнере работает от root (права на `./data` и `rclone.conf`).
+`./data:/app/data` и `./rclone:/config/rclone` (на запись), `RCLONE_CONFIG=/config/rclone/rclone.conf`. Процесс в контейнере работает от root (права на `./data` и `rclone/rclone.conf`).
 
 ## Проверка после запуска
 
