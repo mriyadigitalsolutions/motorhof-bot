@@ -18,12 +18,13 @@ import asyncio
 import logging
 import shutil
 import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Awaitable, Callable, Protocol
+from typing import Awaitable, Callable, Iterator, Protocol
 
-from core.drive import CarAmbiguous, CarFolder, CarNotFound, Drive
+from core.drive import CarAmbiguous, CarFolder, CarNotFound, Drive, DriveError
 from core.queue import Job, JobQueue, QueueFull
 
 from .cleanup import DngSet, delete_dng, find_dng, mb
@@ -69,10 +70,12 @@ CREATE TABLE IF NOT EXISTS photos_dng_requests (
     dng_bytes INTEGER NOT NULL,
     status TEXT NOT NULL,
     requester_name TEXT,
-    admin_id INTEGER
+    admin_id INTEGER,
+    pending_at TEXT
 );
 """
-# Статусы запроса: asked → pending_admin → confirmed → done; kept, cancelled, stale, failed.
+# Статусы запроса: asked → pending_admin → confirmed → done; kept, cancelled, stale, expired,
+# interrupted, failed.
 _FINISHED = {"pending_admin", "confirmed", "done", "kept", "cancelled"}
 
 
@@ -92,6 +95,7 @@ class DngRequest:
     status: str
     requester_name: str | None
     admin_id: int | None
+    pending_at: str | None = None
 
 
 def _plural_days(n: int) -> str:
@@ -119,6 +123,23 @@ def sure_text(code: str, count: int, size: int) -> str:
 def deleted_text(code: str, count: int, size: int) -> str:
     return (f"{code}: {count} DNG перемещены в корзину Drive ({mb(size)}). "
             f"Восстановить можно в течение {TRASH_DAYS} дней.")
+
+
+def failed_text(code: str, reason: str) -> str:
+    return (f"{code}: удалить DNG не удалось: {reason.rstrip('.')}. "
+            "Файлы не тронуты или удалены частично — проверь папку.")
+
+
+def interrupted_text(code: str) -> str:
+    return f"{code}: удаление DNG прервано перезапуском сервера, спрошу снова."
+
+
+def _reason(e: Exception) -> str:
+    """Причина для партнёра одной строкой, без трейсбэка."""
+    if isinstance(e, DriveError):
+        return e.message
+    text = getattr(e, "user_text", None) or str(e)
+    return text.splitlines()[0] if text.strip() else type(e).__name__
 
 
 def parse_data(data: str | None) -> tuple[str, int] | None:
@@ -151,14 +172,17 @@ class Reminders:
     def set_sender(self, sender: Sender | None) -> None:
         self.sender = sender
 
-    async def _send(self, chat_id: int | None, text: str, buttons: list[Button] | None = None) -> None:
+    async def _send(self, chat_id: int | None, text: str, buttons: list[Button] | None = None) -> bool:
+        """True — сообщение ушло; ошибка отправки только в лог."""
         if chat_id is None or self.sender is None:
             log.warning("сообщение не отправлено (нет адресата или отправки): %s", text)
-            return
+            return False
         try:
             await self.sender(chat_id, text, buttons)
         except Exception:
             log.exception("сообщение в чат %s не отправлено", chat_id)
+            return False
+        return True
 
     # ---------- база ----------
 
@@ -175,7 +199,7 @@ class Reminders:
     def _request(self, request_id: int) -> DngRequest | None:
         row = self.db.fetchone(
             "SELECT id, code, addressee, chat_id, dng_count, dng_bytes, status, requester_name,"
-            " admin_id FROM photos_dng_requests WHERE id = ?", (request_id,))
+            " admin_id, pending_at FROM photos_dng_requests WHERE id = ?", (request_id,))
         return DngRequest(**row) if row else None
 
     def _set_request(self, request_id: int, **fields) -> None:
@@ -204,12 +228,12 @@ class Reminders:
                 (code, now.isoformat(), telegram_id, chat_id, self._later(now)))
             return
         self._update_car(code, requested_by=telegram_id, chat_id=chat_id)
+        req = self._request(car["pending_request_id"]) if car["pending_request_id"] else None
         silent = car["state"] == "asked" and car["reminded"]
-        if silent or car["state"] == "done":
-            if car["pending_request_id"] is not None:
-                req = self._request(car["pending_request_id"])
-                if req is not None and req.status == "asked":
-                    self._set_request(req.id, status="stale")
+        waiting_admin = req is not None and req.status == "pending_admin"
+        if silent or waiting_admin or car["state"] == "done":
+            if req is not None and req.status in ("asked", "pending_admin"):
+                self._set_request(req.id, status="stale" if req.status == "asked" else "expired")
             self._update_car(code, state="idle", next_ask_at=self._later(now), asked_at=None,
                              reminded=0, pending_request_id=None)
 
@@ -248,9 +272,17 @@ class Reminders:
             asked = datetime.fromisoformat(row["asked_at"])
             if not row["reminded"] and now >= asked + timedelta(days=REMIND_AFTER_DAYS):
                 req = self._request(row["pending_request_id"])
-                if req is not None and req.status == "asked":
-                    await self._ask(row, req)
-                self._update_car(code, reminded=1)
+                if req is None or req.status != "asked" or await self._ask(row, req):
+                    self._update_car(code, reminded=1)
+            return
+        if row["state"] == "pending_admin":
+            req = self._request(row["pending_request_id"]) if row["pending_request_id"] else None
+            if req is not None and req.status == "pending_admin" and req.pending_at and \
+                    now >= datetime.fromisoformat(req.pending_at) + timedelta(days=REMIND_AFTER_DAYS):
+                log.info("%s: администратор не ответил %s дней, запрос истёк", code, REMIND_AFTER_DAYS)
+                self._set_request(req.id, status="expired")
+                self._update_car(code, state="idle", next_ask_at=self._later(now),
+                                 pending_request_id=None, reminded=0)
             return
         if row["state"] != "idle":
             return
@@ -258,7 +290,7 @@ class Reminders:
         time_due = now >= datetime.fromisoformat(row["next_ask_at"])
         if not (sold_due or time_due):
             return
-        dngs = await asyncio.to_thread(self._find, car, False)
+        dngs = await asyncio.to_thread(self._find, car)
         changes: dict = {}
         if sold_due:
             changes["sold_asked_at"] = now.isoformat()
@@ -272,22 +304,31 @@ class Reminders:
             "INSERT INTO photos_dng_requests (code, created_at, addressee, chat_id, dng_count,"
             " dng_bytes, status) VALUES (?, ?, ?, ?, ?, ?, 'asked')",
             (code, now.isoformat(), row["requested_by"], row["chat_id"], dngs.count, dngs.size))
+        if not await self._ask(row, self._request(request_id)):
+            # не ушло — состояние не меняется, вопрос будет на следующей проверке
+            self.db.execute("DELETE FROM photos_dng_requests WHERE id = ?", (request_id,))
+            return
         self._update_car(code, state="asked", asked_at=now.isoformat(), reminded=0,
                          pending_request_id=request_id, next_ask_at=self._later(now), **changes)
-        await self._ask(row, self._request(request_id))
 
-    async def _ask(self, row: dict, req: DngRequest) -> None:
+    async def _ask(self, row: dict, req: DngRequest) -> bool:
         days_ago = (self._now() - datetime.fromisoformat(row["first_done_at"])).days
-        await self._send(req.chat_id, question_text(req.code, req.dng_count, req.dng_bytes, days_ago),
+        return await self._send(req.chat_id, question_text(req.code, req.dng_count, req.dng_bytes, days_ago),
                          [("Удалить", f"{PREFIX}:del:{req.id}"), ("Оставить", f"{PREFIX}:keep:{req.id}")])
 
-    def _find(self, car: CarFolder, strict: bool) -> DngSet:
+    @contextmanager
+    def _scratch(self, car: CarFolder, strict: bool) -> Iterator[tuple[Path, DngSet]]:
+        """Временная папка + подходящие DNG; папка удаляется всегда."""
         self.workdir.mkdir(parents=True, exist_ok=True)
         tmp = Path(tempfile.mkdtemp(prefix=f"{car.code}-dng-", dir=self.workdir))
         try:
-            return find_dng(self.drive, car, tmp, strict=strict)
+            yield tmp, find_dng(self.drive, car, tmp, strict=strict)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
+
+    def _find(self, car: CarFolder) -> DngSet:
+        with self._scratch(car, strict=False) as (_, dngs):
+            return dngs
 
     # ---------- кнопки ----------
 
@@ -318,8 +359,10 @@ class Reminders:
 
     async def _on_del(self, req: DngRequest, user_id: int, user_name: str, access: AccessLike,
                       chat_id: int) -> None:
+        pending = dict(status="pending_admin", requester_name=user_name,
+                       pending_at=self._now().isoformat())
         if access.is_admin(user_id):
-            self._set_request(req.id, status="pending_admin", requester_name=user_name)
+            self._set_request(req.id, **pending)
             self._update_car(req.code, state="pending_admin")
             await self._send(chat_id, sure_text(req.code, req.dng_count, req.dng_bytes),
                              [("Да, удалить", f"{PREFIX}:ok:{req.id}"), ("Нет", f"{PREFIX}:no:{req.id}")])
@@ -328,7 +371,7 @@ class Reminders:
         if not admins:
             await self._send(chat_id, TEXT_NO_ADMIN)
             return
-        self._set_request(req.id, status="pending_admin", requester_name=user_name)
+        self._set_request(req.id, **pending)
         self._update_car(req.code, state="pending_admin")
         for admin in admins:  # личный чат админа = его ID
             await self._send(admin, admin_text(req.code, req.dng_count, req.dng_bytes, user_name),
@@ -387,9 +430,11 @@ class Reminders:
             return None
         try:
             done = await asyncio.to_thread(self._delete, car)
-        except Exception:
+        except Exception as e:
+            log.exception("%s: удаление DNG не выполнено", req.code)
             self._finish(req, "failed")
-            raise
+            await tell(failed_text(req.code, _reason(e)))
+            return None
         if done.count == 0:
             self._finish(req, "done")
             await tell(f"{req.code}: {TEXT_DONE}")
@@ -399,15 +444,28 @@ class Reminders:
         return None
 
     def _delete(self, car: CarFolder) -> DngSet:
-        self.workdir.mkdir(parents=True, exist_ok=True)
-        tmp = Path(tempfile.mkdtemp(prefix=f"{car.code}-dng-", dir=self.workdir))
-        try:
-            dngs = find_dng(self.drive, car, tmp, strict=True)
-            if dngs.count == 0:
-                return dngs
-            return delete_dng(self.drive, car, tmp, dngs)
-        finally:
-            shutil.rmtree(tmp, ignore_errors=True)
+        with self._scratch(car, strict=True) as (tmp, dngs):
+            return delete_dng(self.drive, car, tmp, dngs) if dngs.count else dngs
+
+    def interrupted(self, job: Job) -> str:
+        """on_interrupted для KIND_DELETE: запрос устарел, машина снова idle и спрашивается на
+        ближайшей проверке. Текст — партнёру (через notify очереди) и админу (через sender)."""
+        req = self._request(int(job.payload.get("request_id") or 0))
+        code = req.code if req else (job.key or "")
+        text = interrupted_text(code)
+        if req is None:
+            return text
+        self._set_request(req.id, status="interrupted")
+        car = self._car(req.code)
+        if car is not None and car["pending_request_id"] == req.id:
+            self._update_car(req.code, state="idle", pending_request_id=None, reminded=0,
+                             next_ask_at=self._now().isoformat())
+        if req.admin_id is not None and req.admin_id != job.chat_id:
+            try:
+                asyncio.get_running_loop().create_task(self._send(req.admin_id, text))
+            except RuntimeError:
+                log.warning("%s: админу не сообщено о прерванном удалении (нет event loop)", code)
+        return text
 
     def _finish(self, req: DngRequest, status: str) -> None:
         self._set_request(req.id, status=status)

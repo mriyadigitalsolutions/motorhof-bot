@@ -124,3 +124,27 @@ async def test_keep_asks_again_after_60_days_no_answer_reminds_once(base, servic
     clock.advance(days=60)
     await service.check()
     assert len(outbox.to(PARTNER)) == 3
+
+
+async def test_question_not_sent_keeps_car_idle_until_next_night(base, service, clock, outbox):
+    _car_with_dng(base)
+    service.record_done("MH_1022", PARTNER, PARTNER)
+    clock.advance(days=60)
+    service.set_sender(None)
+    await service.check()
+    assert service.state("MH_1022") == "idle"
+
+    async def broken(chat_id, text, buttons=None):
+        raise RuntimeError("Telegram недоступен")
+
+    service.set_sender(broken)
+    clock.advance(days=1)
+    await service.check()
+    assert service.state("MH_1022") == "idle"
+
+    service.set_sender(outbox)
+    clock.advance(days=1)
+    await service.check()
+    assert service.state("MH_1022") == "asked"
+    assert outbox.to(PARTNER) == [
+        "MH_1022: 2 DNG (2 МБ) сконвертированы 62 дня назад. Удалить исходники?"]

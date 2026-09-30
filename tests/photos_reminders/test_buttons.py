@@ -1,6 +1,7 @@
 """Кнопки вопроса и подтверждения, задача очереди photos.delete_dng на фейковом Drive."""
 from __future__ import annotations
 
+import asyncio
 import json
 import shutil
 
@@ -16,7 +17,7 @@ from tests.photos_reminders.conftest import (
 @pytest.fixture
 def asked(base, service, queue, clock, outbox):
     """Машина с двумя DNG (1 и 2 МБ) и одним HEIC; вопрос партнёру уже задан."""
-    queue.register_kind(KIND_DELETE, service.run_delete)
+    queue.register_kind(KIND_DELETE, service.run_delete, on_interrupted=service.interrupted)
     photos = car_dir(base)
     add_converted(photos, "MH_1022", "IMG_1.DNG", MB, 1)
     add_converted(photos, "MH_1022", "IMG_2.DNG", 2 * MB, 2)
@@ -151,3 +152,90 @@ async def test_car_gone_before_delete_is_stale_nothing_deleted(asked, service, q
     assert fake.trashed == []
     assert outbox.to(PARTNER) == ["MH_1022: Запрос устарел"]
     assert outbox.to(ADMIN) == ["MH_1022: Запрос устарел"]
+
+
+async def test_delete_step_trashes_only_dng_with_ready_jpeg(asked, service, queue, fake, outbox):
+    buttons = await _ask(service, outbox)
+    await service.press(buttons["Удалить"], PARTNER, "Анна", Access())
+    await service.press(dict(outbox.buttons(ADMIN))["Подтвердить"], ADMIN, "Админ", Access())
+    # к моменту удаления в папке появились «неправильные» DNG
+    add_converted(asked, "MH_1022", "IMG_4.DNG", MB, 4, jpeg=False)    # JPEG не залит
+    add_converted(asked, "MH_1022", "IMG_5.DNG", MB, 5, orphan=True)   # JPEG осиротел
+    (asked / "IMG_6.DNG").write_bytes(b"never converted")
+    (asked / "IMG_2.DNG").write_bytes(b"replaced with other content")  # то же имя, другой файл
+    outbox.messages.clear()
+    await queue.run_next()
+    assert sorted(p.rsplit("/", 1)[-1] for p in fake.trashed) == ["IMG_1.DNG"]
+    assert sorted(p.name for p in asked.iterdir() if p.is_file()) == [
+        "IMG_2.DNG", "IMG_3.HEIC", "IMG_4.DNG", "IMG_5.DNG", "IMG_6.DNG"]
+    flags = {f["src"]: f["src_deleted"] for f in _manifest(asked)["files"]}
+    assert flags["IMG_1.DNG"] is True and flags["IMG_2.DNG"] is False
+    assert outbox.to(PARTNER) == [
+        "MH_1022: 1 DNG перемещены в корзину Drive (1 МБ). Восстановить можно в течение 30 дней."]
+
+
+async def test_delete_failure_tells_both(asked, service, queue, fake, outbox):
+    buttons = await _ask(service, outbox)
+    await service.press(buttons["Удалить"], PARTNER, "Анна", Access())
+    await service.press(dict(outbox.buttons(ADMIN))["Подтвердить"], ADMIN, "Админ", Access())
+    fake.fail("deletefile", stderr="ERROR : quota exceeded")
+    outbox.messages.clear()
+    await queue.run_next()
+    text = ("MH_1022: удалить DNG не удалось: rclone упал (удаление в корзину, код 1). "
+            "Файлы не тронуты или удалены частично — проверь папку.")
+    assert outbox.to(PARTNER) == [text] and outbox.to(ADMIN) == [text]
+    assert service.state("MH_1022") == "idle"
+
+
+async def test_interrupted_delete_returns_to_idle_and_tells_both(asked, service, queue, db, outbox):
+    buttons = await _ask(service, outbox)
+    await service.press(buttons["Удалить"], PARTNER, "Анна", Access())
+    ok = dict(outbox.buttons(ADMIN))["Подтвердить"]
+    await service.press(ok, ADMIN, "Админ", Access())
+    db.execute("UPDATE jobs SET status = 'running' WHERE status = 'queued'")
+    outbox.messages.clear()
+    notified = []
+
+    async def notify(job, text):
+        notified.append((job.chat_id, text))
+
+    await queue.start(notify)
+    await queue.stop()
+    await asyncio.sleep(0)
+    text = "MH_1022: удаление DNG прервано перезапуском сервера, спрошу снова."
+    assert notified == [(PARTNER, text)] and outbox.to(ADMIN) == [text]
+    assert service.state("MH_1022") == "idle"
+    outbox.messages.clear()
+    await service.press(ok, ADMIN, "Админ", Access())
+    assert outbox.to(ADMIN) == ["Запрос устарел"]
+    await service.check()
+    assert len(outbox.to(PARTNER)) == 1  # вопрос снова на ближайшей проверке
+
+
+async def test_pending_admin_expires_after_7_days(asked, service, queue, outbox, clock):
+    buttons = await _ask(service, outbox)
+    await service.press(buttons["Удалить"], PARTNER, "Анна", Access())
+    ok = dict(outbox.buttons(ADMIN))["Подтвердить"]
+    clock.advance(days=6)
+    await service.check()
+    assert service.state("MH_1022") == "pending_admin"
+    clock.advance(days=1)
+    await service.check()
+    assert service.state("MH_1022") == "idle"
+    outbox.messages.clear()
+    await service.press(ok, ADMIN, "Админ", Access())
+    assert outbox.to(ADMIN) == ["Запрос устарел"] and queue.status().queued == []
+    clock.advance(days=60)
+    await service.check()
+    assert len(outbox.to(PARTNER)) == 1
+
+
+async def test_fotos_resets_pending_admin(asked, service, queue, outbox):
+    buttons = await _ask(service, outbox)
+    await service.press(buttons["Удалить"], PARTNER, "Анна", Access())
+    ok = dict(outbox.buttons(ADMIN))["Подтвердить"]
+    service.record_done("MH_1022", PARTNER, PARTNER)
+    assert service.state("MH_1022") == "idle"
+    outbox.messages.clear()
+    await service.press(ok, ADMIN, "Админ", Access())
+    assert outbox.to(ADMIN) == ["Запрос устарел"] and queue.status().queued == []

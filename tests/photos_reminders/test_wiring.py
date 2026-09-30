@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from aiogram import Router
+from aiogram.types import CallbackQuery, User
 
 import modules.photos as photos
 from core.settings import load_settings
@@ -23,7 +24,7 @@ async def test_register_wires_night_check_buttons_and_delete(base, queue, drive,
     router = Router()
     service = photos.register(router, queue, settings=_settings(tmp_path, daily_check_time="03:00"),
                               drive=drive, workdir=tmp_path / "tmp")
-    photos.set_sender(outbox)
+    service.set_sender(outbox)
     assert len(router.callback_query.handlers) == 1
     service.record_done("MH_1022", PARTNER, PARTNER)
 
@@ -55,3 +56,52 @@ async def test_successful_fotos_records_car(queue, drive, clock, tmp_path, servi
     handlers.submit(queue, "MH_1022", 555, 555, "Анна")
     await queue.run_next()
     assert service.state("MH_1022") == "idle"
+
+
+class FakeBot:
+    """Вместо сети Telegram: принимает методы API (answerCallbackQuery) и копит их."""
+
+    def __init__(self) -> None:
+        self.methods = []
+
+    async def __call__(self, method, request_timeout=None):
+        self.methods.append(method)
+        return True
+
+
+def _callback(data: str, user_id: int, bot) -> CallbackQuery:
+    return CallbackQuery(id="1", chat_instance="c", data=data,
+                         from_user=User(id=user_id, is_bot=False, first_name="Анна")).as_(bot)
+
+
+async def test_callback_goes_through_make_buttons_to_press(base, service, queue, clock, outbox):
+    photos_dir = car_dir(base)
+    add_converted(photos_dir, "MH_1022", "IMG_1.DNG", MB, 1)
+    service.record_done("MH_1022", PARTNER, PARTNER)
+    clock.advance(days=60)
+    await service.check()
+    data = dict(outbox.buttons(PARTNER))["Удалить"]
+    outbox.messages.clear()
+
+    bot = FakeBot()
+    on_button = handlers.make_buttons(service)
+    await on_button(_callback(data, PARTNER, bot), bot=bot, access=Access())
+    assert [type(m).__name__ for m in bot.methods] == ["AnswerCallbackQuery"]
+    assert outbox.to(PARTNER) == ["Отправил на подтверждение администратору"]
+    assert outbox.to(ADMIN) == ["MH_1022: удалить 1 DNG (1 МБ)? Запросил Анна."]
+
+
+async def test_callback_without_access_logs_error_not_no_admin(base, service, clock, outbox, caplog):
+    photos_dir = car_dir(base)
+    add_converted(photos_dir, "MH_1022", "IMG_1.DNG", MB, 1)
+    service.record_done("MH_1022", PARTNER, PARTNER)
+    clock.advance(days=60)
+    await service.check()
+    data = dict(outbox.buttons(PARTNER))["Удалить"]
+    outbox.messages.clear()
+
+    bot = FakeBot()
+    await handlers.make_buttons(service)(_callback(data, PARTNER, bot), bot=bot)
+    assert outbox.messages == []
+    assert any(r.levelname == "ERROR" and "access" in r.getMessage() for r in caplog.records)
+    assert service.state("MH_1022") == "asked"

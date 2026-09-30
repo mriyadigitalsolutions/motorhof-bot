@@ -230,7 +230,11 @@ def make_buttons(service):
         user = callback.from_user
         chat = callback.message.chat.id if callback.message else None
         await callback.answer()
-        await service.press(callback.data, user.id, user_name(user), access or _NoAccess(), chat)
+        if access is None:
+            log.error("кнопка %s: бот не передал access (dp[\"access\"]), права админа не проверить",
+                      callback.data)
+            return
+        await service.press(callback.data, user.id, user_name(user), access, chat)
 
     return on_button
 
@@ -243,13 +247,3 @@ def make_startup(service):
             service.set_sender(bot_sender(bot))
 
     return on_startup
-
-
-class _NoAccess:
-    """Без Access бота админов нет — удалить нельзя."""
-
-    def is_admin(self, telegram_id) -> bool:
-        return False
-
-    def admins(self) -> set[int]:
-        return set()
