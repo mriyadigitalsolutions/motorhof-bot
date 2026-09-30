@@ -37,7 +37,10 @@ class Sent:
 
 
 @pytest.fixture
-def sent(queue) -> Sent:
+async def sent(queue) -> Sent:
+    """notify подключается публичным JobQueue.start; воркер сразу останавливается —
+    тесты сами двигают очередь через run_next."""
     s = Sent()
-    queue.notify = s
+    await queue.start(s)
+    await queue.stop()
     return s

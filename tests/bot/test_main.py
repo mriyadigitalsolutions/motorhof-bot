@@ -4,6 +4,7 @@ import logging
 import pytest
 
 from bot import main as bot_main
+from bot.auth import AccessMiddleware
 from core.queue import Job
 
 
@@ -68,8 +69,7 @@ def test_build_dispatcher_wires_everything(monkeypatch, tmp_path, caplog):
     try:
         assert "список партнёров пуст" in caplog.text
         assert app.dispatcher["access"] is app.access
-        assert len(app.dispatcher.message.outer_middleware) == 1
-        assert len(app.dispatcher.callback_query.outer_middleware) == 1
+        assert any(isinstance(m, AccessMiddleware) for m in app.dispatcher.update.outer_middleware)
         assert "/fotos" in app.help
     finally:
         app.db.close()

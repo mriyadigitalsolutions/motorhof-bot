@@ -48,6 +48,12 @@ def make_notify(bot) -> Notify:
     return notify
 
 
+def protect(dp: Dispatcher, access: Access) -> None:
+    """Проверка доступа на уровне апдейта: закрывает все типы событий и всех наблюдателей,
+    включая те, что модули зарегистрируют позже."""
+    dp.update.outer_middleware(AccessMiddleware(access))
+
+
 def build(settings: Settings) -> App:
     """Собирает всё, кроме Bot и сети: БД, очередь, доступ, модули, диспетчер."""
     settings.tmp_dir.mkdir(parents=True, exist_ok=True)
@@ -56,15 +62,13 @@ def build(settings: Settings) -> App:
     access = Access(settings)
 
     modules_router = Router(name="modules")
-    loaded = modules.register_all(modules_router, queue)
+    loaded = modules.register_all(modules_router, queue, settings=settings)
     module_help = [getattr(m, "HELP", "") for m in loaded]
 
     dp = Dispatcher()
     dp["access"] = access  # хендлеры получают его аргументом access (права админа)
     dp["settings"] = settings
-    middleware = AccessMiddleware(access)
-    dp.message.outer_middleware(middleware)
-    dp.callback_query.outer_middleware(middleware)
+    protect(dp, access)
     dp.include_routers(make_router(queue, db, settings.tz, module_help), modules_router)
     log.info("модули: %s", ", ".join(m.__name__ for m in loaded) or "нет")
     return App(settings, db, queue, access, dp, help_text(module_help))

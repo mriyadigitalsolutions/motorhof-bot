@@ -39,6 +39,8 @@ def test_last_ten_monospace(tmp_path):
     for n in range(12):
         run = db.record_run_start(f"MH_{1000 + n}", 7, "Иван <b>")
         db.record_run_finish(run, "done", files_total=24, files_done=24)
+    run = db.record_run_start("MH_1011", 7, "Иван <b>")
+    db.record_run_finish(run, "done", files_total=24, files_done=0, files_skipped=24)
     run = db.record_run_start("KO_2001", 8, "Петр")
     db.record_run_finish(run, "failed", error_text="x")
     text = last_text(db, "Europe/Vienna")
@@ -46,9 +48,11 @@ def test_last_ten_monospace(tmp_path):
     lines = text.removeprefix("<pre>").removesuffix("</pre>").strip().splitlines()
     assert len(lines) == 10
     # 22:05 UTC 29.09 = 00:05 30.09 по Вене; новые первыми
-    assert lines[0].split() == ["KO_2001", "30.09.26", "00:05", "Петр", "0", "ошибка"]
+    assert lines[0].split() == ["KO_2001", "30.09.26", "00:05", "Петр", "0/0", "ошибка"]
     assert lines[1].split()[:3] == ["MH_1011", "30.09.26", "00:05"]
-    assert "Иван &lt;b&gt;" in lines[1] and "24" in lines[1].split() and "готово" in lines[1]
+    assert "0/24" in lines[1].split()  # повторный запуск: всё пропущено, но не «пусто»
+    assert "24/24" in lines[2].split()
+    assert "Иван &lt;b&gt;" in lines[1] and "готово" in lines[1]
     db.close()
 
 

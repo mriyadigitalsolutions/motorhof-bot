@@ -24,7 +24,7 @@ async def test_duplicate_queued_and_running(queue):
 
     async def handler(job):
         # пока задача выполняется, партнёр повторяет команду
-        answers.append(ask(queue, "MH_1022 full", uid=2))
+        answers.append(ask(queue, "MH_1022", uid=2))
 
     queue.register_kind(KIND, handler)
     ask(queue, "MH_1022")
@@ -39,3 +39,26 @@ def test_queue_full(queue):
     for n in range(10):
         ask(queue, f"MH_{1000 + n}")
     assert ask(queue, "MH_2000") == "Очередь переполнена (10), попробуй позже"
+
+
+def test_duplicate_with_new_variant_says_not_added(queue):
+    ask(queue, "MH_1040")
+    ask(queue, "MH_1022")
+    assert ask(queue, "mh1022 full", uid=2) == (
+        "MH_1022 уже в очереди, позиция 2. Вариант full не добавлен — запроси его после завершения.")
+    ask(queue, "KO_2001 full")
+    assert ask(queue, "KO_2001 full", uid=2) == "KO_2001 уже в очереди, позиция 3"
+    assert ask(queue, "KO_2001", uid=2) == "KO_2001 уже в очереди, позиция 3"
+
+
+async def test_running_duplicate_with_new_variant(queue):
+    answers = []
+
+    async def handler(job):
+        answers.append(ask(queue, "MH_1022 full", uid=2))
+
+    queue.register_kind(KIND, handler)
+    ask(queue, "MH_1022")
+    await queue.run_next()
+    assert answers == ["MH_1022 уже обрабатывается. Вариант full не добавлен — "
+                       "запроси его после завершения."]

@@ -12,6 +12,6 @@ from . import handlers, job
 MODULE = "_template"
 
 
-def register(router: Router, queue: JobQueue) -> None:
+def register(router: Router, queue: JobQueue, **kwargs) -> None:
     router.message.register(handlers.make_command(queue), Command(handlers.COMMAND))
     queue.register_kind(job.KIND, job.run)

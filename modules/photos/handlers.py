@@ -12,7 +12,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Optional
 
 from aiogram.filters import CommandObject
 from aiogram.types import Message
@@ -33,6 +33,14 @@ KIND = "photos.convert"
 CODE_HINT = "Укажи номер машины с префиксом: /fotos MH_1022 или /fotos KO_2001"
 HELP = ("/fotos MH_1022 — конвертировать фото машины в JPEG (или KO_2001)\n"
         "/fotos MH_1022 full — то же плюс полноразмерные JPEG")
+
+# Какая запись runs открыта для какой задачи — чтобы при перезапуске закрыть ровно её.
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS photos_job_runs (
+    job_id INTEGER PRIMARY KEY,
+    run_id INTEGER NOT NULL
+);
+"""
 
 # MH_1022, mh1022, MH 1022, ko_2001 — префикс, необязательный разделитель, цифры, дальше варианты.
 _CODE = re.compile(r"^(MH|KO)[\s_]?(\d+)(?:\s+(.*))?$", re.IGNORECASE)
@@ -87,9 +95,23 @@ def submit(queue: JobQueue, args: str | None, chat_id: int, telegram_id: int,
         return f"Очередь переполнена ({e.limit}), попробуй позже"
     if result.duplicate_of is not None:
         if result.position == 0:
-            return f"{req.code} уже обрабатывается"
-        return f"{req.code} уже в очереди, позиция {result.position}"
+            text = f"{req.code} уже обрабатывается"
+        else:
+            text = f"{req.code} уже в очереди, позиция {result.position}"
+        return text + _not_added(queue, result.duplicate_of, req.extra)
     return f"{req.code}: в очереди, позиция {result.position}"
+
+
+def _not_added(queue: JobQueue, job_id: int, extra: list[str]) -> str:
+    """Хвост ответа на дубль: варианты, которых нет в уже стоящей задаче, не добавляются."""
+    existing = queue.get(job_id)
+    have = set(existing.payload.get("variants") or []) if existing else set()
+    missing = [v for v in extra if v not in have]
+    if not missing:
+        return ""
+    if len(missing) == 1:
+        return f". Вариант {missing[0]} не добавлен — запроси его после завершения."
+    return f". Варианты {', '.join(missing)} не добавлены — запроси их после завершения."
 
 
 def select_variants(all_variants: dict[str, Variant], extra: list[str]) -> list[Variant]:
@@ -97,22 +119,32 @@ def select_variants(all_variants: dict[str, Variant], extra: list[str]) -> list[
     return [v for v in all_variants.values() if not v.on_demand or v.name in extra]
 
 
-def make_job(queue: JobQueue, drive: Drive | Callable[[], Drive], workdir: Path,
+def open_run(db: Database, job: Job) -> int:
+    """Открывает запись runs для задачи и запоминает её run_id."""
+    db.ensure_schema(SCHEMA)
+    run_id = db.record_run_start(job.key or "", job.telegram_id, job.user_name)
+    db.execute("INSERT OR REPLACE INTO photos_job_runs (job_id, run_id) VALUES (?, ?)",
+               (job.id, run_id))
+    return run_id
+
+
+def make_job(queue: JobQueue, drive: Drive, workdir: Path,
              secrets: list[str] | tuple = (),
              variants_loader: Callable[[], dict[str, Variant]] = load_variants,
-             run: Callable = None):
+             run: Optional[Callable] = None):
     """Обработчик задачи KIND для очереди: job.run + журнал runs. Возвращает итоговый текст;
     непредвиденное исключение пробрасывает — очередь сама пришлёт «задача упала»."""
     db: Database = queue.db
+    db.ensure_schema(SCHEMA)
     run = run or job_mod.run
 
     def handle(job: Job) -> str:
         code = job.key or ""
-        run_id = db.record_run_start(code, job.telegram_id, job.user_name)
+        run_id = open_run(db, job)
         try:
             variants = select_variants(variants_loader(), list(job.payload.get("variants") or []))
             report = run(
-                code, variants, drive() if callable(drive) else drive, Path(workdir),
+                code, variants, drive, Path(workdir),
                 lambda done, total: queue.set_progress(job.id, done, total),
                 announce=lambda text: queue.say(job, text),
             )
@@ -136,10 +168,13 @@ def make_job(queue: JobQueue, drive: Drive | Callable[[], Drive], workdir: Path,
 def make_interrupted(db: Database):
     """Текст партнёру о задаче, прерванной перезапуском; заодно закрывает её запись в runs."""
 
+    db.ensure_schema(SCHEMA)
+
     def interrupted_text(job: Job) -> str:
         code = job.key or ""
-        db.execute("UPDATE runs SET status = 'interrupted', finished_at = ?"
-                   " WHERE mh = ? AND status = 'running'", (db.now_iso(), code))
+        row = db.fetchone("SELECT run_id FROM photos_job_runs WHERE job_id = ?", (job.id,))
+        if row is not None:
+            db.record_run_finish(row["run_id"], "interrupted")
         return (f"{code}: задача прервана перезапуском сервера. Запусти /fotos {code} ещё раз — "
                 "сделанное не пересчитается.")
 

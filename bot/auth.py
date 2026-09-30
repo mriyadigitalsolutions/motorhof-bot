@@ -1,7 +1,8 @@
 """Кто есть кто: партнёры (ALLOWED_TELEGRAM_IDS) и админы (партнёры из ADMIN_TELEGRAM_IDS).
 
-AccessMiddleware ставится outer-middleware на message и callback_query: чужой отправитель или
-не личный чат — событие поглощается без ответа, в лог строка с ID и командой (без текста).
+AccessMiddleware ставится outer-middleware на dp.update (bot.main.protect) — до любого наблюдателя,
+для всех типов апдейтов: чужой отправитель или не личный чат — апдейт поглощается без ответа,
+в лог строка с ID и командой (без текста).
 """
 from __future__ import annotations
 
@@ -9,7 +10,7 @@ import logging
 from typing import Any, Awaitable, Callable
 
 from aiogram import BaseMiddleware
-from aiogram.types import CallbackQuery, Message, TelegramObject
+from aiogram.types import CallbackQuery, Message, TelegramObject, Update
 
 from core.settings import Settings
 
@@ -39,6 +40,15 @@ class Access:
 
 def _describe(event: TelegramObject) -> tuple[int | None, str | None, str]:
     """(ID отправителя, тип чата, название команды) — без текста сообщения."""
+    if isinstance(event, Update):
+        try:
+            inner = event.event
+        except Exception:  # тип апдейта, неизвестный этой версии aiogram
+            return None, None, "неизвестный апдейт"
+        uid, chat_type, command = _describe(inner)
+        if command == type(inner).__name__:
+            command = event.event_type
+        return uid, chat_type, command
     user = getattr(event, "from_user", None)
     uid = user.id if user else None
     if isinstance(event, CallbackQuery):

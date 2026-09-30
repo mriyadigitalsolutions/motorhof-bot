@@ -80,3 +80,55 @@ async def test_stranger_or_group_silent_and_logged(event, command, caplog):
     line = caplog.records[-1].getMessage()
     assert str(event.from_user.id) in line and command in line
     assert "секрет" not in caplog.text and "MH_1022" not in line
+
+
+def dispatcher_with_everything(access):
+    """Диспетчер, у которого «модуль» подписан на все основные типы апдейтов."""
+    from aiogram import Dispatcher, Router
+
+    from bot.main import protect
+
+    calls = []
+    router = Router()
+    for name in ("message", "edited_message", "callback_query", "inline_query",
+                 "channel_post", "my_chat_member"):
+        async def h(event, _name=name):
+            calls.append(_name)
+        getattr(router, name).register(h)
+    dp = Dispatcher()
+    protect(dp, access)
+    dp.include_router(router)
+    return dp, calls
+
+
+def updates(uid):
+    from aiogram.types import InlineQuery, Update
+
+    user = User(id=uid, is_bot=False, first_name="X")
+    return [
+        Update(update_id=1, message=message(uid)),
+        Update(update_id=2, edited_message=message(uid, "исправил секрет")),
+        Update(update_id=3, callback_query=callback(uid)),
+        Update(update_id=4, inline_query=InlineQuery(id="i", from_user=user, query="секрет",
+                                                     offset="")),
+        Update(update_id=5, channel_post=Message(message_id=2, date=datetime(2026, 9, 30),
+                                                 text="секрет",
+                                                 chat=Chat(id=-5, type="channel"))),
+    ]
+
+
+async def test_stranger_blocked_on_every_update_type(caplog):
+    from aiogram import Bot
+
+    dp, calls = dispatcher_with_everything(Access(settings()))
+    bot = Bot("123456:" + "A" * 35)  # только объект, сеть не трогается
+    with caplog.at_level(logging.INFO):
+        for upd in updates(42):
+            await dp.feed_update(bot, upd)
+    assert calls == []
+    assert "секрет" not in caplog.text
+    # партнёр в личке проходит; канал без отправителя — нет
+    for upd in updates(2):
+        await dp.feed_update(bot, upd)
+    assert calls == ["message", "edited_message", "callback_query"]
+    await bot.session.close()

@@ -7,7 +7,7 @@ from PIL import Image
 
 from core.drive import Drive
 from modules.photos import handlers
-from modules.photos.handlers import KIND, make_interrupted, make_job, submit
+from modules.photos.handlers import KIND, make_interrupted, make_job, open_run, submit
 from tests.fakes.fake_rclone import FakeRclone
 
 ROOT = "MOTORHOF_AUTO"
@@ -91,7 +91,8 @@ async def test_unexpected_exception_reported(queue, db, sent, tmp_path):
     def boom(*a, **kw):
         raise RuntimeError("сломалось SECRET123")
 
-    queue.register_kind(KIND, make_job(queue, None, tmp_path, secrets=["SECRET123"], run=boom))
+    drive = Drive("motorhof", ROOT, runner=lambda *a, **kw: None)
+    queue.register_kind(KIND, make_job(queue, drive, tmp_path, secrets=["SECRET123"], run=boom))
     fotos(queue, "MH_1022")
     job = await queue.run_next()
     assert job.status == "failed"
@@ -102,23 +103,35 @@ async def test_unexpected_exception_reported(queue, db, sent, tmp_path):
 
 
 async def test_interrupted_on_start_and_queue_continues(queue, db, photos_kind, sent):
+    # чужая «висящая» запись того же номера (например, из CLI) — её трогать нельзя
+    other = db.record_run_start("MH_1022", 9, "Петр")
     fotos(queue, "MH_1022")
-    # имитация: задача взята воркером и запись в runs открыта, потом процесс умер
+    # имитация: воркер взял задачу и открыл её запись в runs, потом процесс умер
     db.execute("UPDATE jobs SET status = 'running' WHERE status = 'queued'")
-    db.record_run_start("MH_1022", 7, "Иван")
+    job = queue.status().current
+    own = open_run(db, job)
     fotos(queue, "MH_1040")
-    await queue.start(sent)
+    fresh = []
+    await queue.start(fresh_notify(fresh))
     try:
-        assert sent.texts[0] == ("MH_1022: задача прервана перезапуском сервера. "
-                                 "Запусти /fotos MH_1022 ещё раз — сделанное не пересчитается.")
-        assert db.last_runs()[0]["status"] == "interrupted"
+        assert fresh[0] == ("MH_1022: задача прервана перезапуском сервера. "
+                            "Запусти /fotos MH_1022 ещё раз — сделанное не пересчитается.")
+        runs = {r["id"]: r for r in db.last_runs()}
+        assert runs[own]["status"] == "interrupted" and runs[own]["finished_at"]
+        assert runs[other]["status"] == "running"
         for _ in range(200):  # воркер продолжает очередь: MH_1040 выполняется после старта
-            if len(sent.texts) > 1:
+            if len(fresh) > 1:
                 break
             await asyncio.sleep(0.02)
-        assert sent.texts[1].startswith("MH_1040: папка машины не найдена")
+        assert fresh[1].startswith("MH_1040: папка машины не найдена")
     finally:
         await queue.stop()
+
+
+def fresh_notify(box):
+    async def notify(job, text):
+        box.append(text)
+    return notify
 
 
 async def test_register_wires_command_and_kind(queue, sent, fake, tmp_path):
@@ -135,10 +148,26 @@ async def test_register_wires_command_and_kind(queue, sent, fake, tmp_path):
     assert job.status == "done" and sent.texts[-1].startswith("MH_1022 готово")
 
 
-def test_register_defaults_from_settings(queue, monkeypatch, tmp_path):
+async def test_register_defaults_from_settings(queue, sent, monkeypatch, base, tmp_path):
+    """Без явных drive/workdir всё берётся из Settings: Drive (локальный режим по RCLONE_REMOTE
+    с «/»), tmp задачи — в TMP_DIR."""
     from aiogram import Router
+    from aiogram.filters import Command
 
     import modules.photos as photos
+    from core.settings import load_settings
 
-    monkeypatch.setenv("TMP_DIR", str(tmp_path / "t"))
-    photos.register(Router(), queue)  # без rclone и сети: Drive только конструируется
+    work = tmp_path / "from-settings-tmp"
+    settings = load_settings({"TMP_DIR": str(work), "RCLONE_REMOTE": str(base),
+                              "DRIVE_ROOT": ROOT, "TELEGRAM_BOT_TOKEN": "1:SECRET"})
+    router = Router()
+    photos.register(router, queue, settings=settings)
+    [handler] = router.message.handlers
+    [cmd] = [f.callback for f in handler.filters if isinstance(f.callback, Command)]
+    assert cmd.commands == ("fotos",)
+    assert not work.exists()
+    fotos(queue, "MH_1022")
+    job = await queue.run_next()
+    assert job.kind == KIND and job.status == "done"
+    assert sent.texts[-1].startswith("MH_1022 готово: 2 JPEG")
+    assert work.is_dir() and list(work.iterdir()) == []  # папка задачи была в TMP_DIR и убрана

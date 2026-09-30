@@ -55,7 +55,8 @@ def _local(iso: str, tz: ZoneInfo) -> str:
 
 
 def last_text(db: Database, tz: str, n: int = 10) -> str:
-    """Последние n запусков моноширинным блоком (HTML <pre>): номер, дата, кто, файлов, результат."""
+    """Последние n запусков моноширинным блоком (HTML <pre>): номер, дата, кто,
+    файлов (залито/всего), результат."""
     runs = db.last_runs(n)
     if not runs:
         return "Запусков ещё не было"
@@ -63,7 +64,7 @@ def last_text(db: Database, tz: str, n: int = 10) -> str:
     rows = []
     for r in runs:
         who = (r.get("user_name") or str(r.get("telegram_id") or "?"))[:12]
-        rows.append((r["mh"], _local(r["started_at"], zone), who, str(r.get("files_done") or 0),
+        rows.append((r["mh"], _local(r["started_at"], zone), who, f"{r.get('files_done') or 0}/{r.get('files_total') or 0}",
                      RESULTS.get(r["status"], r["status"])))
     widths = [max(len(row[i]) for row in rows) for i in range(4)]
     lines = ["  ".join(cell.ljust(widths[i]) if i < 4 else cell for i, cell in enumerate(row))

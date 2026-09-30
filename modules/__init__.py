@@ -14,11 +14,12 @@ ENABLED: list[str] = [
 ]
 
 
-def register_all(router, queue, names: Iterable[str] | None = None) -> list[ModuleType]:
-    """Импортирует modules.<имя> для каждого включённого модуля и вызывает его register."""
+def register_all(router, queue, names: Iterable[str] | None = None, **kwargs) -> list[ModuleType]:
+    """Импортирует modules.<имя> для каждого включённого модуля и вызывает его
+    register(router, queue, **kwargs); бот передаёт settings=<Settings>."""
     loaded = []
     for name in ENABLED if names is None else names:
         module = importlib.import_module(f"{__name__}.{name}")
-        module.register(router, queue)
+        module.register(router, queue, **kwargs)
         loaded.append(module)
     return loaded
