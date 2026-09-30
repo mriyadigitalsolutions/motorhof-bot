@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from aiogram.filters import CommandObject
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from core.db import Database
 from core.drive import Drive
@@ -131,9 +131,12 @@ def open_run(db: Database, job: Job) -> int:
 def make_job(queue: JobQueue, drive: Drive, workdir: Path,
              secrets: list[str] | tuple = (),
              variants_loader: Callable[[], dict[str, Variant]] = load_variants,
-             run: Optional[Callable] = None):
+             run: Optional[Callable] = None,
+             on_done: Optional[Callable[[str, Optional[int], Optional[int]], None]] = None):
     """Обработчик задачи KIND для очереди: job.run + журнал runs. Возвращает итоговый текст;
-    непредвиденное исключение пробрасывает — очередь сама пришлёт «задача упала»."""
+    непредвиденное исключение пробрасывает — очередь сама пришлёт «задача упала».
+    on_done(code, telegram_id, chat_id) — после успешной конвертации (не пустой папки):
+    машина запоминается для напоминания об удалении DNG."""
     db: Database = queue.db
     db.ensure_schema(SCHEMA)
     run = run or job_mod.run
@@ -160,6 +163,11 @@ def make_job(queue: JobQueue, drive: Drive, workdir: Path,
                              files_total=report.done + report.skipped + failed,
                              files_done=report.done, files_skipped=report.skipped,
                              files_failed=failed)
+        if on_done is not None and report.status != "empty":
+            try:
+                on_done(code, job.telegram_id, job.chat_id)
+            except Exception:
+                log.exception("%s: машина не записана для напоминания о DNG", code)
         return report.text()
 
     return handle
@@ -196,3 +204,52 @@ def make_command(queue: JobQueue):
         await message.answer(text)
 
     return on_fotos
+
+
+# ---------- кнопки напоминания об удалении DNG ----------
+
+def bot_sender(bot):
+    """Отправка сообщений модуля через Bot: (chat_id, text, кнопки [(текст, callback_data)])."""
+
+    async def send(chat_id: int, text: str, buttons=None) -> None:
+        markup = None
+        if buttons:
+            markup = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text=t, callback_data=d) for t, d in buttons]])
+        await bot.send_message(chat_id, text, reply_markup=markup)
+
+    return send
+
+
+def make_buttons(service):
+    """Обработчик нажатий ph:del|keep|ok|no:<id>. Права админа — из `access` бота (dp["access"])."""
+
+    async def on_button(callback: CallbackQuery, bot=None, access=None) -> None:
+        if service.sender is None and bot is not None:
+            service.set_sender(bot_sender(bot))
+        user = callback.from_user
+        chat = callback.message.chat.id if callback.message else None
+        await callback.answer()
+        await service.press(callback.data, user.id, user_name(user), access or _NoAccess(), chat)
+
+    return on_button
+
+
+def make_startup(service):
+    """Обработчик startup роутера: aiogram передаёт bot — ночная проверка шлёт через него."""
+
+    async def on_startup(bot=None) -> None:
+        if bot is not None:
+            service.set_sender(bot_sender(bot))
+
+    return on_startup
+
+
+class _NoAccess:
+    """Без Access бота админов нет — удалить нельзя."""
+
+    def is_admin(self, telegram_id) -> bool:
+        return False
+
+    def admins(self) -> set[int]:
+        return set()

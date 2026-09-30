@@ -310,15 +310,11 @@ class Reminders:
                 await self._send(chat_id, TEXT_NOT_YOURS)
                 return
             want = "pending_admin"
-        if req is None or req.status != want or not self._is_current(req):
+        if req is None or req.status != want:
             await self._send(chat_id, TEXT_DONE if req is not None and req.status in _FINISHED
                              else TEXT_STALE)
             return
         await getattr(self, f"_on_{action}")(req, user_id, user_name, access, chat_id)
-
-    def _is_current(self, req: DngRequest) -> bool:
-        car = self._car(req.code)
-        return car is not None and car["pending_request_id"] == req.id
 
     async def _on_del(self, req: DngRequest, user_id: int, user_name: str, access: AccessLike,
                       chat_id: int) -> None:

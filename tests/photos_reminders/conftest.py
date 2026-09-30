@@ -28,8 +28,8 @@ class Clock:
     def __call__(self) -> datetime:
         return self.now
 
-    def advance(self, days: float = 0, hours: float = 0) -> None:
-        self.now += timedelta(days=days, hours=hours)
+    def advance(self, days: float = 0, hours: float = 0, minutes: float = 0) -> None:
+        self.now += timedelta(days=days, hours=hours, minutes=minutes)
 
 
 class Outbox:
