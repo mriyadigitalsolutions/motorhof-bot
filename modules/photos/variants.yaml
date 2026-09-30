@@ -1,0 +1,14 @@
+# Варианты выходных JPEG. Размеры и качество меняются здесь, код не трогаем.
+# Смена параметров варианта → при следующем запуске его файлы пересчитываются под теми же именами.
+variants:
+  listing:
+    max_side: 2000        # длинная сторона, px; меньшие снимки не увеличиваются
+    quality: 92
+    subsampling: 0        # 4:4:4
+    suffix: ""            # MH_1022_01.jpg
+  full:
+    max_side: null        # без уменьшения
+    quality: 95
+    subsampling: 0
+    suffix: "_full"       # MH_1022_01_full.jpg
+    on_demand: true       # только по /fotos MH_1022 full
