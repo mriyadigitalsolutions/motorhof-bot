@@ -105,3 +105,4 @@
 - Таблицы: `photos_cars`, `photos_dng_requests(id, code, created_at, addressee, chat_id, dng_count, dng_bytes, status, requester_name, admin_id)`.
 - `cleanup.find_dng(drive, car, tmp, *, strict=False) -> DngSet(files, manifest, .count, .size)`, `delete_dng(drive, car, tmp, dngs) -> DngSet`, `mb(n)`.
 - `photos.register(...)` возвращает `Reminders`; `photos.set_sender(fn)`; отправка для ночной проверки — из `router.startup` (aiogram передаёт `bot`). `handlers.make_job(..., on_done=None)`; `bot_sender(bot)`, `make_buttons(service)`, `make_startup(service)`.
+- (доработка 06) `Reminders.interrupted(job) -> str` (on_interrupted для `photos.delete_dng`), `failed_text(code, reason)`, `interrupted_text(code)`; `register(...) -> Reminders`, sender ставится через `.set_sender` возвращённого сервиса (модульного глобала нет); `photos_dng_requests.pending_at` — 7 дней без ответа админа → `expired`. Вопрос считается заданным только после успешной отправки.

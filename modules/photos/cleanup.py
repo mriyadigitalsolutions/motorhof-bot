@@ -61,7 +61,7 @@ def find_dng(drive: Drive, car: CarFolder, tmp: Path, *, strict: bool = False) -
         return DngSet()
     manifest = Manifest.load(drive.pull(f"{out_dir}/{MANIFEST_NAME}", tmp / MANIFEST_NAME),
                              mh=car.code)
-    ready = [f for f in manifest.files if f["out"] in outputs]
+    ready = [f for f in manifest.files if not f.get("orphan", False) and f["out"] in outputs]
     ready_sha = {f["sha256"] for f in ready}
     ready_names = {f["src"] for f in ready}
     result = DngSet(manifest=manifest)
