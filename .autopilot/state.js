@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T21:27:45+00:00",
+  "updatedAt": "2026-09-30T21:29:31+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -168,7 +168,7 @@ window.STATE =
       "zone": [
         "modules/photos/ (convert, naming, exif, manifest)"
       ],
-      "status": "repair",
+      "status": "done",
       "retries": 0,
       "repairs": 2,
       "handoffs": 0,
@@ -179,7 +179,13 @@ window.STATE =
         "taken vs mtime в разных временных базах — R19",
         "текст ошибки не по истории 19",
         "execute: известный исходник становится orphan при пересчёте плана"
-      ]
+      ],
+      "finishedAt": "2026-09-30T21:29:31+00:00",
+      "commit": "de731f7",
+      "tests": {
+        "passed": 101,
+        "failed": 0
+      }
     },
     {
       "id": "04",
@@ -314,7 +320,7 @@ window.STATE =
   ],
   "singlePass": null,
   "tests": {
-    "passed": 63,
+    "passed": 101,
     "failed": 0
   },
   "debt": {
@@ -345,7 +351,8 @@ window.STATE =
     "03 · convert.py:69-72 — значения по умолчанию quality/subsampling в коде; max_side не валидируется",
     "03 · convert.py:16-21 — запасной путь при ImportError pillow_heif (speculative generality)",
     "03 · convert.py:25/158 — .heif в _decode, но нет в SOURCE_SUFFIXES",
-    "03 · tests/photos/test_photos_convert.py:100 — __import__ вместо импорта; NN≥100 проверено только на out_name"
+    "03 · tests/photos/test_photos_convert.py:100 — __import__ вместо импорта; NN≥100 проверено только на out_name",
+    "процесс · хук требует коммит на каждой остановке — часть WIP-коммитов смешивает таски (изменения 03 попали в acd634a); история коммитов не 1:1 с тасками"
   ],
   "reviewers": {
     "manifestSpec": "acfd6bada15842b42",
