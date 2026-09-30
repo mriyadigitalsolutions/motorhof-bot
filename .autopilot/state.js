@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T21:39:21+00:00",
+  "updatedAt": "2026-09-30T21:42:54+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -223,7 +223,7 @@ window.STATE =
       "zone": [
         "modules/photos/job.py"
       ],
-      "status": "repair",
+      "status": "done",
       "retries": 0,
       "repairs": 1,
       "handoffs": 0,
@@ -233,7 +233,13 @@ window.STATE =
         "пустая «На выгрузку» при нуле JPEG",
         "текст битого манифеста с именем класса Python",
         "total из чернового плана; дубли хэша/MANIFEST_NAME; TZ в тестах"
-      ]
+      ],
+      "finishedAt": "2026-09-30T21:42:54+00:00",
+      "commit": "d536635",
+      "tests": {
+        "passed": 145,
+        "failed": 0
+      }
     },
     {
       "id": "05",
@@ -269,10 +275,11 @@ window.STATE =
         "bot/",
         "modules/photos/handlers.py"
       ],
-      "status": "pending",
+      "status": "in-progress",
       "retries": 0,
       "repairs": 0,
-      "handoffs": 0
+      "handoffs": 0,
+      "startedAt": "2026-09-30T21:42:54+00:00"
     },
     {
       "id": "06",
@@ -337,7 +344,7 @@ window.STATE =
   ],
   "singlePass": null,
   "tests": {
-    "passed": 122,
+    "passed": 145,
     "failed": 0
   },
   "debt": {
@@ -375,7 +382,10 @@ window.STATE =
     "02 · core/drive.py:45 — Runner как Callable[..., RunResult] вместо Protocol",
     "04 · job.py:_run ~100 строк — этапы в одной функции",
     "04 · два формата отчёта (job.Report.text и __main__.format_report)",
-    "04 · тестовые помощники make_jpeg/make_car скопированы в трёх conftest"
+    "04 · тестовые помощники make_jpeg/make_car скопированы в трёх conftest",
+    "04 · test_progress_total_follows_render_plan зелёный и на старом коде — не ловит расхождение при пересчёте плана",
+    "04 · фикстура vienna_tz в двух реализациях (tests/photos_job/conftest.py, tests/photos/test_photos_manifest.py)",
+    "04 · job.py:204 — причина ManifestCorrupt не пишется в лог"
   ],
   "reviewers": {
     "manifestSpec": "acfd6bada15842b42",
