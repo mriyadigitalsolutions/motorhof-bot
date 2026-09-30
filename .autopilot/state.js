@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T22:27:41+00:00",
+  "updatedAt": "2026-09-30T22:30:24+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -407,10 +407,11 @@ window.STATE =
         "modules/photos/",
         "tests/"
       ],
-      "status": "pending",
+      "status": "in-progress",
       "retries": 0,
       "repairs": 0,
-      "handoffs": 0
+      "handoffs": 0,
+      "startedAt": "2026-09-30T22:30:24+00:00"
     }
   ],
   "singlePass": null,
@@ -469,7 +470,19 @@ window.STATE =
     "manifestSpec": "abc0acae4069042f5",
     "craft": "a9d5a828dfc7f2f9e"
   },
-  "blind": null,
+  "blind": {
+    "ranAt": "2026-09-30T22:30:24+00:00",
+    "agreed": "все 14 требований брифа, «чего не делать», дополнения — реализовано (Drive-сценарий прогнан на локальном rclone; Telegram и сборка образа с apt/pip — только тестами/частично)",
+    "drift": [
+      "R19 — команда «/fotos … заново» не построена: пользователь ответил «а» без явного подтверждения команды; спрошу в отчёте",
+      "R40 — PLAN §8 №3 (сервер), №4 (триггер), №7 (Online) не задавались: №4 решён самим PLAN (только команда), №7 — брифом («На выгрузку», имя в .env), №3 на код не влияет"
+    ],
+    "notVerifiedLive": [
+      "Telegram-бот (нет токена)",
+      "ссылка на папку Drive (нет настоящего Drive)",
+      "ночные напоминания в реальном Telegram"
+    ]
+  },
   "concernsTriage": {
     "fixNow": [
       0,
