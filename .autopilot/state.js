@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T21:53:15+00:00",
+  "updatedAt": "2026-09-30T21:57:47+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -275,7 +275,7 @@ window.STATE =
         "bot/",
         "modules/photos/handlers.py"
       ],
-      "status": "repair",
+      "status": "done",
       "retries": 0,
       "repairs": 1,
       "handoffs": 0,
@@ -285,7 +285,13 @@ window.STATE =
         "модуль грузит свои настройки, secrets могут быть пусты",
         "прерванная задача закрывает runs сырым UPDATE по mh",
         "дубль с full без пояснения; /last files_done"
-      ]
+      ],
+      "finishedAt": "2026-09-30T21:57:47+00:00",
+      "commit": "ca5c57c",
+      "tests": {
+        "passed": 193,
+        "failed": 0
+      }
     },
     {
       "id": "06",
@@ -312,10 +318,11 @@ window.STATE =
       "zone": [
         "modules/photos/reminders.py"
       ],
-      "status": "pending",
+      "status": "in-progress",
       "retries": 0,
       "repairs": 0,
-      "handoffs": 0
+      "handoffs": 0,
+      "startedAt": "2026-09-30T21:57:47+00:00"
     },
     {
       "id": "07",
@@ -342,15 +349,16 @@ window.STATE =
         "docker-compose.yml",
         "README.md"
       ],
-      "status": "pending",
+      "status": "in-progress",
       "retries": 0,
       "repairs": 0,
-      "handoffs": 0
+      "handoffs": 0,
+      "startedAt": "2026-09-30T21:57:47+00:00"
     }
   ],
   "singlePass": null,
   "tests": {
-    "passed": 145,
+    "passed": 193,
     "failed": 0
   },
   "debt": {
@@ -391,7 +399,11 @@ window.STATE =
     "04 · тестовые помощники make_jpeg/make_car скопированы в трёх conftest",
     "04 · test_progress_total_follows_render_plan зелёный и на старом коде — не ловит расхождение при пересчёте плана",
     "04 · фикстура vienna_tz в двух реализациях (tests/photos_job/conftest.py, tests/photos/test_photos_manifest.py)",
-    "04 · job.py:204 — причина ManifestCorrupt не пишется в лог"
+    "04 · job.py:204 — причина ManifestCorrupt не пишется в лог",
+    "05 · tests/bot/conftest.py:43 — фикстура sent рассчитывает, что stop() оставляет notify (не контракт очереди)",
+    "05 · handlers.py — ensure_schema вызывается трижды, в т.ч. на каждую задачу",
+    "05 · photos_job_runs — строки не удаляются",
+    "05 · register(**kwargs) молча глотает неизвестные аргументы"
   ],
   "reviewers": {
     "manifestSpec": "abc0acae4069042f5",
