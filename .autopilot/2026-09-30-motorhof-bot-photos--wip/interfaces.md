@@ -42,3 +42,25 @@
 ## Построено тасками
 
 (дополняется по мере сдачи тасков)
+
+### Из таска 03 — конвертация и манифест (modules/photos)
+
+- `convert`: `Variant(name, max_side: int|None, quality, subsampling=0, suffix="", on_demand=False).fingerprint() -> str`; `load_variants(path=None) -> dict[str, Variant]`; `ImageMeta(taken, offset, width, height, make, model)`; `read_meta(src) -> ImageMeta`; `to_jpeg(src, variant, dst) -> ImageMeta` (через `dst.part` + rename); `ConvertError`; `SOURCE_SUFFIXES`
+- `exif`: `clean(exif) -> Image.Exif`, `taken(exif)`, `offset(exif)`
+- `naming`: `out_name(mh, nn, suffix="")`, `sort_key(src)`, `order(sources)`
+- `manifest`: `Source(name, sha256, taken=None, mtime=None)`; `RenderItem(source, variant, out_name, nn)`; `Plan(to_render, skipped, orphans, new_orphans, duplicates)`; `Manifest.load(path|None, mh=None)` → `ManifestCorrupt` на битом/чужом; `.plan(sources, variants, existing_outputs: set[str]) -> Plan` (orphan-флаги ставит сразу); `.apply(results)`; `.dump(path)` атомарно; `.to_dict()`
+- `_manifest.json`: `{"version":1,"mh","updated","files":[{"out","src","sha256","taken","variant","orphan","nn","params","src_deleted"}]}`
+- `__main__`: `run_local(in_dir, out_dir, mh, extra_variants=(), variants_file=None) -> LocalReport`, `format_report(r)`, `main(argv) -> int` (0 ок, 3 манифест повреждён, 2 ошибка аргументов/режим Drive); позиционный режим `MH_1022 [full]` — место оставлено для таска 04
+- `modules/photos/__init__.py` пока пустой — наполняет таск 05
+- Тесты: `tests/photos/` (conftest там же)
+
+### Из таска 01 — ядро (core/, modules/)
+
+- `core.settings`: `Settings` (frozen: telegram_bot_token, allowed_telegram_ids / admin_telegram_ids: frozenset[int], rclone_remote, drive_root, source_subdir, output_subdir, tmp_dir: Path, db_path: Path, log_level, queue_limit, tz, daily_check_time "HH:MM", dng_reminder_days; `.secrets() -> list[str]`); `load_settings(env=None) -> Settings`. Битый элемент списка ID → весь список пуст.
+- `core.log`: `redact(text, secrets=()) -> str` — использовать для stderr rclone и error_text; `setup_logging(level, secrets, stream=None)`; `RedactingFilter`
+- `core.db`: `Database(path, clock=utc_now)`: `execute`, `fetchall -> list[dict]`, `fetchone`, `ensure_schema(sql)`, `transaction()`, `now_iso()`, `close()`; `record_run_start(mh, telegram_id, user_name, files_total=0) -> run_id`; `record_run_finish(run_id, status, files_total=None, files_done=0, files_skipped=0, files_failed=0, error_text=None)`; `last_runs(n=10)` (новые первыми). Таблицы `jobs`, `runs` — см. спецификацию §2 (+ user_name).
+- `core.queue`: `JobQueue(db, limit=10, tz="Europe/Vienna", clock=None, poll_interval=5, schedule_interval=30)`; `register_kind(kind, handler, on_interrupted=None)` — handler `(job: Job) -> str|None` (синхронный → to_thread; строка = итоговое сообщение партнёру); `enqueue(module, kind, payload, chat_id, telegram_id, user_name) -> EnqueueResult(job_id, position, duplicate_of)` (position 0 = выполняется; дедуп по payload["key"]), переполнение → `QueueFull(limit)`; `status() -> QueueStatus(current, queued)`; `get(job_id)`; `set_progress(job_id, done, total)`; `say(job, text)` (промежуточное сообщение, можно из потока); `every_day(hhmm, fn)`; `run_due()`; `run_next()`; `recover_interrupted()`; `async start(notify)` (сам вызывает recover и уведомляет) / `async stop()`. `Job` (frozen, `.key`). Kind — глобальное имя, например `"photos.convert"`.
+- notify-контракт для бота: `async notify(job: Job, text: str) -> None` → сообщение в `job.chat_id`. Необработанное исключение → «<key>: задача упала: <Тип>. Подробности в журнале сервера.»
+- Очередь НЕ пишет `runs` — журнал запусков пишет модуль (photos), error_text через `redact`.
+- `modules`: `ENABLED: list[str]` (= ["photos"]), `register_all(router, queue, names=None)`; шаблон `modules/_template/` (команда /template, kind `_template.echo`, `handlers.submit(queue, arg, chat_id, telegram_id, user_name) -> str`)
+- Тесты: `/home/user/venv-motorhof/bin/python -m pytest -q`; `tests/core/`
