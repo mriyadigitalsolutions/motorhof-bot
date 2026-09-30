@@ -27,10 +27,10 @@ async def test_register_wires_night_check_buttons_and_delete(base, queue, drive,
     assert len(router.callback_query.handlers) == 1
     service.record_done("MH_1022", PARTNER, PARTNER)
 
-    clock.advance(days=59, hours=19)  # 29.11 07:00 по Вене: проверка прошла, 60 дней ещё нет
+    clock.advance(days=59, hours=19)  # 29.11 06:00 по Вене: проверка прошла, 60 дней ещё нет
     assert await queue.run_due() == 1
     assert outbox.messages == []
-    clock.advance(hours=19, minutes=59)  # 30.11 02:59 — рано
+    clock.advance(hours=20, minutes=59)  # 30.11 02:59 — рано
     assert await queue.run_due() == 0
     clock.advance(minutes=1)  # 30.11 03:00 по Вене
     assert await queue.run_due() == 1
