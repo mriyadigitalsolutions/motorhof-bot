@@ -61,7 +61,7 @@ def test_two_folders_are_ambiguous_with_paths(base, drive):
         "MH_AUTO_ПРОДАНО/2026/MH_1022_Mazda_3",
     ]
     assert "найдено 2 папки" in str(exc.value)
-    assert "…/2025/MH_1022_Mazda_2" in str(exc.value)
+    assert "MH_AUTO_НАЛИЧИЕ/2025/MH_1022_Mazda_2" in str(exc.value)
 
 
 def test_missing_top_folder_does_not_break_search(base, drive, fake):
@@ -227,3 +227,13 @@ def test_from_settings_uses_remote_root_and_subdirs(base, fake):
     for call in fake.calls:
         assert call[0] == "rclone"
         assert not any(a.startswith("-v") or a.startswith("--dump") for a in call)
+
+
+def test_ambiguous_message_shows_top_folder_for_each_path(base, drive):
+    make_car(base, "MH_AUTO_НАЛИЧИЕ", "2026", "MH_1022_Mazda")
+    make_car(base, "MH_AUTO_ПРОДАНО", "2026", "MH_1022_Mazda")
+    with pytest.raises(CarAmbiguous) as exc:
+        drive.find_car("MH_1022")
+    text = str(exc.value)
+    assert "MH_AUTO_НАЛИЧИЕ/2026/MH_1022_Mazda" in text
+    assert "MH_AUTO_ПРОДАНО/2026/MH_1022_Mazda" in text

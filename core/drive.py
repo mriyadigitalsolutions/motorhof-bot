@@ -73,7 +73,7 @@ class CarAmbiguous(Exception):
     def __init__(self, code: str, paths: list[str]):
         self.code = code
         self.paths = list(paths)
-        shown = ", ".join("…/" + "/".join(p.split("/")[-2:]) for p in self.paths)
+        shown = ", ".join(self.paths)  # полный путь от корня: видно, наличие это или продано
         super().__init__(
             f"{code}: найдено {len(self.paths)} папки с этим номером, не угадываю: {shown}. Оставь одну."
         )
