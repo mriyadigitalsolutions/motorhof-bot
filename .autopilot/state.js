@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T22:16:58+00:00",
+  "updatedAt": "2026-09-30T22:26:34+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -47,23 +47,28 @@ window.STATE =
     },
     {
       "id": "build",
-      "status": "active",
-      "startedAt": "2026-09-30T21:12:54+00:00"
+      "status": "done",
+      "startedAt": "2026-09-30T21:12:54+00:00",
+      "finishedAt": "2026-09-30T22:26:34+00:00",
+      "note": "7 из 7 тасков готовы"
     },
     {
       "id": "review",
-      "status": "active",
-      "startedAt": "2026-09-30T21:21:04+00:00"
+      "status": "done",
+      "startedAt": "2026-09-30T21:21:04+00:00",
+      "finishedAt": "2026-09-30T22:26:34+00:00",
+      "note": "7 из 7 тасков готовы"
     },
     {
       "id": "final",
-      "status": "pending"
+      "status": "active",
+      "startedAt": "2026-09-30T22:26:34+00:00"
     }
   ],
   "requirements": {
-    "total": 54,
-    "done": 0,
-    "inTicket": 54,
+    "total": 55,
+    "done": 55,
+    "inTicket": 0,
     "inSpec": 0,
     "placeholder": 0,
     "deferred": 0,
@@ -318,15 +323,21 @@ window.STATE =
       "zone": [
         "modules/photos/reminders.py"
       ],
-      "status": "repair",
-      "retries": 0,
+      "status": "done",
+      "retries": 1,
       "repairs": 1,
       "handoffs": 0,
       "startedAt": "2026-09-30T21:57:47+00:00",
       "repairFindings": [
         "тест удаления не может покраснеть (BLOCKING)",
         "asked до успешной отправки; нет on_interrupted у удаления; pending_admin вечен; сбой удаления не сообщается обоим"
-      ]
+      ],
+      "finishedAt": "2026-09-30T22:26:34+00:00",
+      "commit": "b0664e5",
+      "tests": {
+        "passed": 243,
+        "failed": 0
+      }
     },
     {
       "id": "07",
@@ -373,7 +384,7 @@ window.STATE =
   ],
   "singlePass": null,
   "tests": {
-    "passed": 193,
+    "passed": 243,
     "failed": 0
   },
   "debt": {
@@ -419,7 +430,9 @@ window.STATE =
     "05 · handlers.py — ensure_schema вызывается трижды, в т.ч. на каждую задачу",
     "05 · photos_job_runs — строки не удаляются",
     "05 · register(**kwargs) молча глотает неизвестные аргументы",
-    "07 · R48: коммиты не 1:1 с тасками и с префиксами chore:/WIP: — хук среды требует коммит+push на каждой остановке; итоговая история содержит WIP-снимки"
+    "07 · R48: коммиты не 1:1 с тасками и с префиксами chore:/WIP: — хук среды требует коммит+push на каждой остановке; итоговая история содержит WIP-снимки",
+    "06 · tests/photos_reminders/test_buttons.py:268,288 — notify подменяется присваиванием queue.notify мимо start",
+    "06 · прерванное удаление: гарантия «нет общего текста очереди» держится на задаче без адресата (chat_id/telegram_id=None) — очередь не умеет завершать задачу failed без notify"
   ],
   "reviewers": {
     "manifestSpec": "abc0acae4069042f5",
