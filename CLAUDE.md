@@ -94,11 +94,11 @@ Dockerfile, docker-compose.yml (сервис photos), .env.example, PLAN.md (с�
 ## Тесты
 
 - pytest + pytest-asyncio (`asyncio_mode = auto`, `pytest.ini`); `testpaths = tests`.
-- Шов Drive — `Drive("motorhof", ROOT, runner=FakeRclone(...))` (см. `tests/drive/conftest.py`) из `tests/fakes/fake_rclone.py`; aiogram и сеть Telegram не поднимаются, бот тестируется через функции-сервисы.
+- Шов Drive — `Drive("motorhof", ROOT, runner=FakeRclone(...))`: общие фикстуры `base`, `fake`, `drive`, `vienna_tz` в `tests/conftest.py`; помощники в `tests/fakes/` (`fake_rclone.py`, `drive_tree.py` — `make_car`, `images.py` — `make_jpeg`, `crash.py` — `die_mid_job`); aiogram и сеть Telegram не поднимаются, бот тестируется через функции-сервисы.
 - Очередь и БД — на временной SQLite.
 - Фикстуры `tests/fixtures/IMG_4079.HEIC`, `tests/fixtures/IMG_4561.DNG` в git нет → тесты с ними `skipif` (`tests/photos/conftest.py`, `tests/photos_job/conftest.py`).
 - Без rclone в `PATH` пропускаются `tests/drive/test_drive_rclone.py` и часть `tests/photos_job/test_job_cli.py`; без демона Docker — сборочный тест в `tests/test_packaging.py`.
-- Фикстура `vienna_tz` в `tests/photos_job/conftest.py` — для тестов, зависящих от порядка снимков.
+- Очередь в тестах — только публичные методы (`set_notify`, `start`, `run_next`); внутренности (`_notify`, `_claim`, прямой SQL в `jobs`) не трогать.
 
 ## Подводные камни
 
@@ -106,7 +106,7 @@ Dockerfile, docker-compose.yml (сервис photos), .env.example, PLAN.md (с�
 - ARG в `Dockerfile` не должны начинаться с `RCLONE_` — rclone прочтёт их как свои флаги (`RELEASE_RCLONE`, `SHA256_RCLONE_ZIP`).
 - Порядок снимков (`naming.sort_key`) сравнивает время в наивном местном времени процесса: TZ процесса меняет нумерацию.
 - Рендер только через `Manifest.execute(..., render)`: он исключает упавший исходник и пересчитывает план без дыр в номерах; голую пару `plan`/`apply` не использовать.
-- Задача `photos.delete_dng` ставится с `chat_id=None` — `notify` бота её пропускает; сообщения о прерванном удалении ждут `set_sender` (отправка ставится в `router.startup`).
+- Обработчик задачи завершает её «тихо» (failed без общего «задача упала») через `raise core.queue.JobFailedQuietly(text=None)`; так работает сбой удаления DNG (`DeleteFailed`). Сообщения админу о прерванном удалении ждут `set_sender` (ставится в `router.startup`).
 - Вопрос про DNG считается заданным только после успешной отправки.
 - Ноль JPEG и манифеста не было → `На выгрузку` не создаётся; пустая `Фотографии` → `Report(status="empty")`, не исключение.
 - `.dockerignore` исключает `tests/fixtures`, `.autopilot`, `rclone/`, `data/`, все `.env*` кроме `.env.example`.
