@@ -89,3 +89,11 @@
 - CLI: `python -m modules.photos MH_1022 [full]` (Drive из настроек, workdir = settings.tmp_dir); коды 0/1/2/3.
 - Манифест заливается последним и только если изменился; JPEG заливается сразу после конвертации.
 - (доработка 04) `manifest.MANIFEST_NAME`, `manifest.sha256_file(path)` — единственное место; `Manifest.execute(..., on_plan=None)` вызывает `on_plan(plan)` перед рендером каждого плана. Частичный сбой заливки → манифест с уже залитым уходит на Drive до ошибки. Ноль JPEG и манифеста не было → `На выгрузку` не создаётся. Фикстура `vienna_tz` в tests/photos_job/conftest.py.
+
+### Из таска 05 — бот (bot/, modules/photos/__init__.py, handlers.py)
+
+- `bot.auth.Access(settings)`: `.is_partner(id)`, `.is_admin(id)`, `.admins() -> set[int]` (только админы из партнёров); `AccessMiddleware(access)` — outer на message и callback_query.
+- `bot.main`: `build(settings) -> App(settings, db, queue, access, dispatcher, help)`; `make_notify(bot)`; `main() -> int`. В `dp["access"]`, `dp["settings"]` — хендлер получает их, объявив аргумент `access: Access` / `settings: Settings`. Пустой токен → лог ERROR, код 2.
+- `bot.router`: `help_text(module_help)`, `status_text(queue)`, `last_text(db, tz, n=10)` (HTML `<pre>`), `make_router(queue, db, tz, module_help)`; строка `HELP` модуля попадает в /help.
+- `modules.photos.register(router, queue, *, settings=None, drive=None, workdir=None)` — без аргументов берёт load_settings(); Drive создаётся здесь. Таск 06 регистрирует тут кнопки `router.callback_query.register(fn, F.data.startswith("ph:"))` (префикс по спецификации §8: `ph:del|keep|ok|no:<id>`) и `queue.every_day(settings.daily_check_time, fn)`.
+- `modules.photos.handlers`: `parse_request(args, variants=None) -> Request(code, extra)` / `BadRequest(.text)`; `submit(queue, args, chat_id, telegram_id, user_name) -> str`; `make_job(queue, drive, workdir, secrets=(), variants_loader=load_variants, run=None)`; `make_interrupted(db)`; `user_name(user)`; `select_variants`; `KIND="photos.convert"`, `MODULE`, `COMMAND`, `CODE_HINT`, `HELP`. Payload задачи `{"key": code, "variants": [...]}`. runs пишется в обработчике задачи; прерванная → runs `interrupted`.
