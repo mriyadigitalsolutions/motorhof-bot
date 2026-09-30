@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T22:13:04+00:00",
+  "updatedAt": "2026-09-30T22:16:58+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -353,7 +353,7 @@ window.STATE =
         "docker-compose.yml",
         "README.md"
       ],
-      "status": "repair",
+      "status": "done",
       "retries": 0,
       "repairs": 2,
       "handoffs": 0,
@@ -362,7 +362,13 @@ window.STATE =
         "rclone.conf монтирован файлом — токен не сохраняется (D01)",
         "ARG RCLONE_VERSION читается rclone как флаг — сборка падает (найдено реальной сборкой)",
         "README: rclone config без rclone на хосте, 7-дневный токен Testing, x86; .dockerignore на любой глубине (свежий контекст)"
-      ]
+      ],
+      "finishedAt": "2026-09-30T22:16:58+00:00",
+      "commit": "1d84261",
+      "tests": {
+        "passed": 23,
+        "failed": 0
+      }
     }
   ],
   "singlePass": null,
@@ -412,7 +418,8 @@ window.STATE =
     "05 · tests/bot/conftest.py:43 — фикстура sent рассчитывает, что stop() оставляет notify (не контракт очереди)",
     "05 · handlers.py — ensure_schema вызывается трижды, в т.ч. на каждую задачу",
     "05 · photos_job_runs — строки не удаляются",
-    "05 · register(**kwargs) молча глотает неизвестные аргументы"
+    "05 · register(**kwargs) молча глотает неизвестные аргументы",
+    "07 · R48: коммиты не 1:1 с тасками и с префиксами chore:/WIP: — хук среды требует коммит+push на каждой остановке; итоговая история содержит WIP-снимки"
   ],
   "reviewers": {
     "manifestSpec": "abc0acae4069042f5",
