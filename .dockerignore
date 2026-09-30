@@ -1,0 +1,17 @@
+# Секреты — никогда в образ
+.env
+.env.*
+!.env.example
+rclone.conf
+# Данные сервиса приходят volume'ом
+data
+# Сборка, служебное, тесты с тяжёлыми фикстурами
+.git
+.gitignore
+.autopilot
+.pytest_cache
+**/__pycache__
+**/*.pyc
+tests/fixtures
+node_modules
+.DS_Store
