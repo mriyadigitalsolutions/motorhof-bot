@@ -23,27 +23,66 @@ modules/        __init__.py — список включённых модулей
   _template/    заготовка нового модуля
 tests/          pytest; fixtures/ — реальные снимки (в git не лежат), fakes/ — фейковый rclone
 data/           volume: SQLite (очередь, журнал) и временные файлы; в git не лежит
-rclone/         volume: rclone.conf (кладётся руками на сервере); в git не лежит
+rclone/         volume: rclone.conf (создаётся `docker compose run ... rclone config`); в git не лежит
 Dockerfile, docker-compose.yml, .env.example
 ```
 
 ## Первичная настройка сервера (руками, один раз)
 
+Сервер — **x86_64** (Hetzner CX/CPX, план — CX22). Образ скачивает rclone для `linux-amd64`;
+на ARM-сервере (Hetzner CAX) он не запустится — мультиархитектуры нет. Проверка: `uname -m` → `x86_64`.
+
+Все аккаунты — **OG, не личные**: бот в Telegram создаётся с аккаунта OG, Google Drive — под
+`office@motorhof.at` (§23.2/§23.3 Gesellschaftsvertrag). Личный аккаунт партнёра — это зависимость,
+которую потом придётся мигрировать.
+
 1. Docker с автозапуском: `systemctl enable docker` (без этого `restart: unless-stopped`
    не поднимет бота после перезагрузки сервера).
 2. `git clone <репо> motorhof-bot && cd motorhof-bot`
-3. **Бот**: в Telegram с аккаунта OG написать `@BotFather` → `/newbot` → сохранить токен.
-4. **Telegram-ID** трёх партнёров: каждый пишет `@userinfobot`, тот отвечает числом.
-5. **rclone**: на сервере `rclone config` → new remote, имя `motorhof`, тип `drive`, вход под
-   `office@motorhof.at`, на вопрос про общий диск — да (`team_drive`), выбрать диск MOTORHOF.
-   Проверка: `rclone lsd motorhof:MOTORHOF_AUTO` — должны быть видны `MH_AUTO_НАЛИЧИЕ`,
-   `MH_AUTO_ПРОДАНО`, `KO_AUTO_НАЛИЧИЕ`, `KO_AUTO_ПРОДАНО`.
-   Затем положить конфиг в папку проекта: `mkdir -p rclone && cp ~/.config/rclone/rclone.conf rclone/rclone.conf`.
+3. `cp .env.example .env` — сразу, даже пустой: без файла `.env` не запустится ни одна команда
+   `docker compose` (он указан в `env_file`). Значения впишем в шаге 7.
+4. **Бот**: в Telegram с аккаунта OG написать `@BotFather` → `/newbot` → сохранить токен.
+5. **Telegram-ID** трёх партнёров: каждый пишет `@userinfobot`, тот отвечает числом.
+6. **rclone** — на сервере ставить не нужно, он есть в образе. Конфиг создаётся прямо из контейнера:
+
+   ```
+   mkdir -p rclone
+   docker compose run --rm --no-deps photos rclone config
+   ```
+
+   Команда заменяет запуск бота, поэтому токен бота в `.env` для неё не нужен. Каталог `./rclone`
+   смонтирован в `/config/rclone`, а `RCLONE_CONFIG=/config/rclone/rclone.conf`, так что конфиг
+   сразу ложится в `./rclone/rclone.conf` (первый запуск ещё и соберёт образ — пара минут).
+   Ответы в диалоге:
+   - `n` (New remote), имя — `motorhof`;
+   - Storage — `drive` (Google Drive);
+   - `client_id` и `client_secret` — **оставить пустыми** (встроенный клиент rclone, см. ниже);
+   - scope — `1` (drive, полный доступ);
+   - `service_account_file` — пусто; «Edit advanced config?» — `n`;
+   - «Use web browser to automatically authenticate?» — **`n`** (на сервере нет браузера).
+     rclone попросит выполнить на компьютере с браузером команду `rclone authorize "drive"`.
+     На этом компьютере поставить rclone с https://rclone.org/downloads/ (сервер для этого не нужен),
+     выполнить `rclone authorize "drive"`, войти под `office@motorhof.at`, скопировать
+     выведенный токен (строка `{...}` целиком) и вставить её в диалог на сервере;
+   - «Configure this as a Shared Drive (Team Drive)?» — **`y`** (`team_drive`), выбрать общий диск
+     MOTORHOF из списка;
+   - сохранить (`y`), выйти (`q`).
+
+   Проверка:
+   `docker compose run --rm --no-deps photos rclone lsd motorhof:MOTORHOF_AUTO` — должны быть видны
+   `MH_AUTO_НАЛИЧИЕ`, `MH_AUTO_ПРОДАНО`, `KO_AUTO_НАЛИЧИЕ`, `KO_AUTO_ПРОДАНО`.
    Монтируется каталог `rclone/`, а не сам файл: rclone сохраняет обновлённый токен переименованием
    файла, а смонтированный отдельно файл переименовать нельзя.
-6. `cp .env.example .env` и вписать значения (см. ниже). `.env` и `rclone/` в `.gitignore`,
-   в образ не попадают (`.dockerignore`), их содержимое никуда не печатать.
-7. Запуск: `docker compose up -d --build`, затем в Telegram `/status`.
+
+   **Важно про OAuth (PLAN §8).** Если в `client_id` вписать собственный OAuth-клиент Google,
+   а его консент-экран оставлен в режиме **Testing**, refresh-token умирает через **7 дней** —
+   бот молча перестаёт видеть Drive. Поэтому: либо встроенный клиент rclone (пустые `client_id`
+   и `client_secret`, как выше), либо свой клиент, но консент-экран сразу перевести в **Production**.
+   Клиент в Google Cloud — тоже в проекте OG, не личном.
+7. Вписать значения в `.env` (см. ниже). `.env` и `rclone/` в `.gitignore`,
+   в образ не попадают (`.dockerignore`, в том числе вложенные `.env*` и `rclone.conf*`),
+   их содержимое никуда не печатать.
+8. Запуск: `docker compose up -d --build`, затем в Telegram `/status`.
 
 ### Что вписать самому в `.env`
 
@@ -80,9 +119,9 @@ Dockerfile, docker-compose.yml, .env.example
 - Остановка: `docker compose down` (очередь и журнал остаются в `./data`)
 
 Контейнер: `python:3.12-slim`, `LANG=C.UTF-8` (кириллица в путях Drive), `TZ=Europe/Vienna`,
-rclone v1.71.1 из официального релиза GitHub (проверка контрольной суммы и `rclone version` при сборке).
+rclone v1.71.1 для `linux-amd64` из официального релиза GitHub (проверка контрольной суммы и `rclone version` при сборке).
 `docker-compose.yml`: один сервис `photos`, `restart: unless-stopped`, `env_file: .env`, volumes
-`./data:/app/data` и `./rclone:/config/rclone` (на запись), `RCLONE_CONFIG=/config/rclone/rclone.conf`. Процесс в контейнере работает от root (права на `./data` и `rclone/rclone.conf`).
+`./data:/app/data` и `./rclone:/config/rclone` (на запись); `RCLONE_CONFIG=/config/rclone/rclone.conf` задан в `Dockerfile` (только там). Процесс в контейнере работает от root (права на `./data` и `rclone/rclone.conf`).
 
 ## Проверка после запуска
 
@@ -91,7 +130,14 @@ rclone v1.71.1 из официального релиза GitHub (проверк
    `docker compose exec photos python -m modules.photos MH_1022` (с `full` — плюс полноразмерные).
    Печатает отчёт; код выхода 0 — готово, 1 — ошибка задачи, 2 — ошибка аргументов, 3 — манифест повреждён.
 3. Reboot-тест: `sudo reboot`, после загрузки `/status` в Telegram должен ответить сам.
-4. Локальная конвертация без Drive (на своей машине или в контейнере):
+4. Секреты не попали в git: `git log -p --all | grep -nE '[0-9]{8,10}:[A-Za-z0-9_-]{35}|refresh_token|access_token|client_secret'`
+   должен ничего не вывести (первое — формат токена Telegram), и
+   `git log --all --name-only --format= | grep -E '(^|/)(\.env|rclone\.conf)'` — тоже пусто
+   (`.env.example` допустим). Нашлось — токен перевыпустить (BotFather `/revoke`, заново
+   `rclone config`), историю не «чинить» молча.
+5. После приёмки (всё выше прошло, партнёры проверили фото): `git tag v1.0 && git push origin v1.0`,
+   ссылку на репозиторий записать в документацию проекта.
+6. Локальная конвертация без Drive (на своей машине или в контейнере):
    `python -m modules.photos --in <папка> --out <папка> --mh MH_1022 [--variant full]`.
 
 ## Команды бота

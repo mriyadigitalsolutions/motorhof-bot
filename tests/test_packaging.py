@@ -193,13 +193,146 @@ def test_dockerfile_installs_requirements_and_starts_bot():
 
 
 # --- .dockerignore ---
+# Семантика как у Docker (moby/patternmatcher): пути относительно корня контекста, `*` и `?` не
+# переходят через `/`, `**` — любое число каталогов (в том числе ноль), правило действует и на всё
+# внутри совпавшего каталога, `!` возвращает путь, при нескольких совпадениях решает последнее.
+
+def dockerignore_rules() -> list[tuple[bool, re.Pattern]]:
+    rules = []
+    for raw in read(".dockerignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        negate = line.startswith("!")
+        pattern = line[1:].strip() if negate else line
+        pattern = pattern.strip("/")
+        pattern = re.sub(r"/+", "/", pattern)
+        rules.append((negate, re.compile(glob_to_regex(pattern))))
+    return rules
+
+
+def glob_to_regex(pattern: str) -> str:
+    out, i = [], 0
+    while i < len(pattern):
+        if pattern.startswith("**/", i):
+            out.append("(?:.*/)?")
+            i += 3
+        elif pattern.startswith("**", i):
+            out.append(".*")
+            i += 2
+        elif pattern[i] == "*":
+            out.append("[^/]*")
+            i += 1
+        elif pattern[i] == "?":
+            out.append("[^/]")
+            i += 1
+        elif pattern[i] == "[":
+            end = pattern.index("]", i + 1)
+            body = pattern[i + 1:end]
+            out.append("[" + ("^" + body[1:] if body.startswith("^") else body) + "]")
+            i = end + 1
+        else:
+            out.append(re.escape(pattern[i]))
+            i += 1
+    return "^" + "".join(out) + "$"
+
+
+def dockerignored(path: str, rules) -> bool:
+    parts = path.split("/")
+    candidates = ["/".join(parts[:n]) for n in range(1, len(parts) + 1)]
+    excluded = False
+    for negate, rx in rules:
+        if any(rx.match(c) for c in candidates):
+            excluded = not negate
+    return excluded
+
+
+# Ожидаемое — из требований к образу, а не из самого .dockerignore
+MUST_EXCLUDE = (
+    ".env", ".env.prod", "bot/.env", "deploy/old/.env", "deploy/.env.local",
+    "rclone.conf", "rclone.conf.bak", "rclone/rclone.conf", "rclone/rclone.conf.old123",
+    "backup/rclone.conf", "backup/deep/rclone.conf.old", "rclone/any-other-file",
+    "data/motorhof.sqlite", "data/tmp/MH_1022/IMG_1.DNG",
+    "tests/fixtures/IMG_4561.DNG", ".autopilot/x/tickets.md", ".git/config",
+)
+MUST_KEEP = (
+    ".env.example", "requirements.txt", "bot/main.py", "core/settings.py",
+    "modules/photos/variants.yaml", "modules/photos/convert.py", "modules/__init__.py",
+)
+
+
+def test_dockerignore_rule_semantics_self_check():
+    # проверка самого разборщика на примерах из документации Docker
+    rules = [(False, re.compile(glob_to_regex("**/*.go"))), (False, re.compile(glob_to_regex("*.md"))),
+             (True, re.compile(glob_to_regex("README*.md"))), (False, re.compile(glob_to_regex("README-secret.md")))]
+    assert dockerignored("a/b/c.go", rules) and dockerignored("c.go", rules)
+    assert dockerignored("CHANGES.md", rules) and not dockerignored("a/CHANGES.md", rules)
+    assert not dockerignored("README.md", rules) and dockerignored("README-secret.md", rules)
+
 
 def test_dockerignore_keeps_secrets_and_bulk_out_of_image():
-    lines = {l.strip().rstrip("/") for l in read(".dockerignore").splitlines()
-             if l.strip() and not l.startswith("#")}
-    for pattern in (".env", "rclone.conf", "rclone", "data", ".autopilot", ".git"):
-        assert pattern in lines, f".dockerignore: нет {pattern}"
-    assert "tests/fixtures" in lines or "tests" in lines
+    rules = dockerignore_rules()
+    leaked = [p for p in MUST_EXCLUDE if not dockerignored(p, rules)]
+    assert not leaked, f".dockerignore пропускает в образ: {leaked}"
+    lost = [p for p in MUST_KEEP if dockerignored(p, rules)]
+    assert not lost, f".dockerignore не пускает нужное: {lost}"
+
+
+def docker_available() -> bool:
+    import shutil
+    import subprocess
+    if not shutil.which("docker"):
+        return False
+    try:
+        return subprocess.run(["docker", "info"], capture_output=True, timeout=20).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
+@pytest.mark.skipif(not docker_available(), reason="нет демона Docker")
+def test_dockerignore_real_build_context(tmp_path):
+    """Настоящий docker build: FROM scratch + COPY . /ctx, затем список файлов из docker export."""
+    import shutil
+    import subprocess
+    import tarfile
+    import uuid
+
+    ctx = tmp_path / "ctx"
+    ctx.mkdir()
+    shutil.copy(ROOT / ".dockerignore", ctx / ".dockerignore")
+    for rel in MUST_EXCLUDE + MUST_KEEP:
+        f = ctx / rel
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text("x", encoding="utf-8")
+    build_dir = tmp_path / "build"
+    build_dir.mkdir()
+    (build_dir / "Dockerfile").write_text("FROM scratch\nCOPY . /ctx\nCMD [\"none\"]\n", encoding="utf-8")
+    tag = f"motorhof-dockerignore-test:{uuid.uuid4().hex[:12]}"
+    run = lambda *a, **kw: subprocess.run(list(a), capture_output=True, timeout=300, **kw)
+    r = run("docker", "build", "-q", "-t", tag, "-f", str(build_dir / "Dockerfile"), str(ctx))
+    assert r.returncode == 0, r.stderr.decode(errors="replace")[-2000:]
+    container = None
+    try:
+        r = run("docker", "create", tag)
+        assert r.returncode == 0, r.stderr.decode(errors="replace")
+        container = r.stdout.decode().strip()
+        tar_path = tmp_path / "fs.tar"
+        r = run("docker", "export", "-o", str(tar_path), container)
+        assert r.returncode == 0, r.stderr.decode(errors="replace")
+        with tarfile.open(tar_path) as tar:
+            files = {m.name.removeprefix("ctx/") for m in tar.getmembers()
+                     if m.isfile() and m.name.startswith("ctx/")}
+    finally:
+        if container:
+            run("docker", "rm", "-f", container)
+        run("docker", "rmi", "-f", tag)
+    leaked = sorted(set(MUST_EXCLUDE) & files)
+    assert not leaked, f"в образ попали: {leaked}"
+    missing = sorted(set(MUST_KEEP) - files)
+    assert not missing, f"в образ не попали: {missing}"
+    # разборщик выше согласен с настоящим Docker
+    rules = dockerignore_rules()
+    assert {p for p in MUST_EXCLUDE + MUST_KEEP if not dockerignored(p, rules)} == files - {".dockerignore"}
 
 
 # --- README.md ---
@@ -222,6 +355,42 @@ def test_readme_covers_deploy_update_and_checks():
         assert needle in text, f"README: нет «{needle}»"
     for name in setting_names():
         assert name in text, f"README: не описана переменная {name}"
+
+
+def test_readme_rclone_setup_without_rclone_on_host():
+    text = read("README.md")
+    for needle in (
+        # конфиг создаётся rclone из образа и сразу ложится в смонтированный ./rclone
+        "docker compose run --rm --no-deps photos rclone config",
+        "docker compose run --rm --no-deps photos rclone lsd motorhof:MOTORHOF_AUTO",
+        "drive", "team_drive", "office@motorhof.at", "`motorhof`",
+        # сервер без браузера
+        "Use web browser to automatically authenticate?",
+        'rclone authorize "drive"',
+        "rclone.org",
+    ):
+        assert needle in text, f"README: нет «{needle}»"
+    assert "~/.config/rclone" not in text, "на хосте rclone нет — копировать оттуда нечего"
+    # .env должен существовать до первого docker compose run (env_file обязателен)
+    assert text.index("cp .env.example .env") < text.index("photos rclone config")
+
+
+def test_readme_warns_about_oauth_testing_mode_and_og_accounts():
+    text = read("README.md")
+    for needle in ("Testing", "7 дней", "Production", "client_id", "OG"):
+        assert needle in text, f"README: нет «{needle}»"
+
+
+def test_readme_states_server_architecture():
+    text = read("README.md")
+    for needle in ("x86_64", "CX22", "linux-amd64"):
+        assert needle in text, f"README: нет «{needle}»"
+
+
+def test_readme_predeploy_checks():
+    text = read("README.md")
+    for needle in ("git log -p", "v1.0"):
+        assert needle in text, f"README: нет «{needle}»"
 
 
 def test_git_ignores_rclone_dir_config():

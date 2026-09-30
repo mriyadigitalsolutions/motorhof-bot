@@ -35,7 +35,8 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-# data/ приходит volume'ом (./data), конфиг rclone — каталогом (./rclone/rclone.conf)
+# data/ приходит volume'ом (./data), конфиг rclone — каталогом (./rclone/rclone.conf).
+# RCLONE_CONFIG задаётся только здесь (в docker-compose.yml его нет).
 ENV RCLONE_CONFIG=/config/rclone/rclone.conf
 RUN mkdir -p /app/data /config/rclone
 

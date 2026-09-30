@@ -6,12 +6,10 @@ services:
     image: motorhof-bot:latest
     restart: unless-stopped          # поднимается после перезагрузки (нужен systemctl enable docker)
     env_file: .env
-    environment:
-      RCLONE_CONFIG: /config/rclone/rclone.conf
     volumes:
       # SQLite (очередь, журнал) и временные файлы; пути TMP_DIR и DB_PATH из .env лежат здесь
       - ./data:/app/data
-      # каталог с rclone.conf на запись: rclone сохраняет обновлённый OAuth-токен
+      # каталог с rclone.conf на запись (RCLONE_CONFIG задан в Dockerfile): rclone сохраняет обновлённый OAuth-токен
       # переименованием файла, а смонтированный отдельно файл переименовать нельзя
       - ./rclone:/config/rclone
     logging:

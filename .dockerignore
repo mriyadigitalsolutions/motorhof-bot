@@ -1,11 +1,11 @@
-# Секреты — никогда в образ
-.env
-.env.*
+# Секреты — никогда в образ, на любой глубине
+**/.env
+**/.env.*
 !.env.example
-rclone.conf
-rclone
+**/rclone.conf*
+rclone/
 # Данные сервиса приходят volume'ом
-data
+data/
 # Сборка, служебное, тесты с тяжёлыми фикстурами
 .git
 .gitignore
