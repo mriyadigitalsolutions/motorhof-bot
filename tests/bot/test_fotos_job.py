@@ -7,6 +7,7 @@ import pytest
 from core.drive import Drive
 from modules.photos import handlers
 from modules.photos.handlers import KIND, make_interrupted, make_job, open_run, submit
+from tests.fakes.crash import die_mid_job
 from tests.fakes.drive_tree import ROOT, make_car
 from tests.fakes.images import make_jpeg
 
@@ -96,10 +97,10 @@ async def test_interrupted_on_start_and_queue_continues(queue, db, photos_kind, 
     # чужая «висящая» запись того же номера (например, из CLI) — её трогать нельзя
     other = db.record_run_start("MH_1022", 9, "Петр")
     fotos(queue, "MH_1022")
-    # имитация: воркер взял задачу и открыл её запись в runs, потом процесс умер
-    db.execute("UPDATE jobs SET status = 'running' WHERE status = 'queued'")
-    job = queue.status().current
-    own = open_run(db, job)
+    # прошлый процесс взял задачу, открыл её запись в runs и умер
+    opened = []
+    await die_mid_job(db, KIND, on_start=lambda job: opened.append(open_run(db, job)))
+    [own] = opened
     fotos(queue, "MH_1040")
     fresh = []
     await queue.start(fresh_notify(fresh))

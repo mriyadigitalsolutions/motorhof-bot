@@ -21,8 +21,10 @@ except ImportError:  # pragma: no cover — без pillow-heif HEIC попадё
     pillow_heif = None
 
 VARIANTS_FILE = Path(__file__).with_name("variants.yaml")
+# Единственный список поддерживаемых расширений (PLAN.md, «Исходники»: dng, heic, jpg, jpeg); .heif не берётся нигде.
 RAW_SUFFIXES = {".dng"}
-SOURCE_SUFFIXES = {".dng", ".heic", ".jpg", ".jpeg"}
+HEIC_SUFFIXES = {".heic"}
+SOURCE_SUFFIXES = RAW_SUFFIXES | HEIC_SUFFIXES | {".jpg", ".jpeg"}
 
 _SRGB = ImageCms.createProfile("sRGB")
 _SRGB_BYTES = ImageCms.ImageCmsProfile(_SRGB).tobytes()
@@ -158,7 +160,7 @@ def _decode(src: Path) -> tuple[Image.Image, Image.Exif | None]:
         with Image.open(src) as tiff:  # EXIF из TIFF-структуры DNG
             ex = _load_exif(tiff)
         return img, ex
-    if src.suffix.lower() in (".heic", ".heif"):
+    if src.suffix.lower() in HEIC_SUFFIXES:
         _check_isobmff(src)
     with Image.open(src) as im:
         im.load()

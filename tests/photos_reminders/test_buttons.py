@@ -9,6 +9,7 @@ import pytest
 
 from modules.photos.manifest import MANIFEST_NAME, Manifest
 from modules.photos.reminders import KIND_DELETE
+from tests.fakes.crash import die_mid_job
 from tests.photos_reminders.conftest import (
     ADMIN, MB, OTHER, PARTNER, Access, add_converted, make_car,
 )
@@ -196,7 +197,7 @@ async def test_interrupted_delete_returns_to_idle_and_tells_both(asked, service,
     await service.press(buttons["Удалить"], PARTNER, "Анна", Access())
     ok = dict(outbox.buttons(ADMIN))["Подтвердить"]
     await service.press(ok, ADMIN, "Админ", Access())
-    db.execute("UPDATE jobs SET status = 'running' WHERE status = 'queued'")
+    await die_mid_job(db, KIND_DELETE)  # процесс взял удаление и умер
     outbox.messages.clear()
     notified = []
 

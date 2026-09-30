@@ -6,22 +6,7 @@ import pytest
 
 from core.db import Database
 from core.queue import JobFailedQuietly, JobQueue, QueueFull
-
-
-async def _die_mid_job(q):
-    """Процесс взял задачу и «умер» посреди неё: обработчик отменяется, статус остаётся running."""
-    started = asyncio.Event()
-
-    async def hang(job):
-        started.set()
-        await asyncio.Event().wait()
-
-    q.register_kind("photos.convert", hang)
-    task = asyncio.create_task(q.run_next())
-    await asyncio.wait_for(started.wait(), 5)
-    task.cancel()
-    with pytest.raises(asyncio.CancelledError):
-        await task
+from tests.fakes.crash import die_mid_job
 
 
 def _enqueue(q, code, kind="photos.convert", user="Anna"):
@@ -215,7 +200,7 @@ async def test_restart_marks_running_as_interrupted_and_continues_queue(tmp_path
     q1 = JobQueue(db1)
     stuck = _enqueue(q1, "MH_1022").job_id
     _enqueue(q1, "MH_1040")
-    await _die_mid_job(q1)
+    await die_mid_job(db1, "photos.convert")
     db1.close()
 
     db2 = Database(path, clock=clock)
@@ -246,7 +231,7 @@ async def test_restart_marks_running_as_interrupted_and_continues_queue(tmp_path
 async def test_recover_interrupted_returns_jobs_and_frees_key(db):
     q = JobQueue(db)
     _enqueue(q, "MH_1022")
-    await _die_mid_job(q)
+    await die_mid_job(db, "photos.convert")
     jobs = q.recover_interrupted()
     assert [(j.key, j.status) for j in jobs] == [("MH_1022", "interrupted")]
     assert _enqueue(q, "MH_1022").duplicate_of is None
