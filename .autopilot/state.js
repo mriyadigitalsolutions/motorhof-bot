@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T21:42:54+00:00",
+  "updatedAt": "2026-09-30T21:51:32+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -275,7 +275,7 @@ window.STATE =
         "bot/",
         "modules/photos/handlers.py"
       ],
-      "status": "in-progress",
+      "status": "review",
       "retries": 0,
       "repairs": 0,
       "handoffs": 0,
@@ -388,8 +388,8 @@ window.STATE =
     "04 · job.py:204 — причина ManifestCorrupt не пишется в лог"
   ],
   "reviewers": {
-    "manifestSpec": "acfd6bada15842b42",
-    "craft": "a7760ef0570187324"
+    "manifestSpec": "abc0acae4069042f5",
+    "craft": "a9d5a828dfc7f2f9e"
   },
   "blind": null
 }
