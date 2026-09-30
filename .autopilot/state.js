@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T21:12:54+00:00",
+  "updatedAt": "2026-09-30T21:13:12+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -31,7 +31,7 @@ window.STATE =
       "status": "done",
       "startedAt": "2026-09-30T20:47:38+00:00",
       "note": "8 вопросов",
-      "finishedAt": "2026-09-30T21:12:54+00:00"
+      "finishedAt": "2026-09-30T21:05:48+00:00"
     },
     {
       "id": "spec",
@@ -94,10 +94,11 @@ window.STATE =
         "modules/__init__.py",
         "modules/_template/"
       ],
-      "status": "pending",
+      "status": "in-progress",
       "retries": 0,
       "repairs": 0,
-      "handoffs": 0
+      "handoffs": 0,
+      "startedAt": "2026-09-30T21:13:12+00:00"
     },
     {
       "id": "02",
@@ -159,10 +160,11 @@ window.STATE =
       "zone": [
         "modules/photos/ (convert, naming, exif, manifest)"
       ],
-      "status": "pending",
+      "status": "in-progress",
       "retries": 0,
       "repairs": 0,
-      "handoffs": 0
+      "handoffs": 0,
+      "startedAt": "2026-09-30T21:13:12+00:00"
     },
     {
       "id": "04",
