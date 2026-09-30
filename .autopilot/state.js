@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T21:23:42+00:00",
+  "updatedAt": "2026-09-30T21:27:45+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -131,7 +131,7 @@ window.STATE =
       "zone": [
         "core/drive.py"
       ],
-      "status": "in-progress",
+      "status": "review",
       "retries": 0,
       "repairs": 0,
       "handoffs": 0,
@@ -170,14 +170,15 @@ window.STATE =
       ],
       "status": "repair",
       "retries": 0,
-      "repairs": 1,
+      "repairs": 2,
       "handoffs": 0,
       "startedAt": "2026-09-30T21:13:12+00:00",
       "repairFindings": [
         "тест .part не может покраснеть (BLOCKING craft)",
         "дыра в нумерации при непрочитанном файле — R10",
         "taken vs mtime в разных временных базах — R19",
-        "текст ошибки не по истории 19"
+        "текст ошибки не по истории 19",
+        "execute: известный исходник становится orphan при пересчёте плана"
       ]
     },
     {
