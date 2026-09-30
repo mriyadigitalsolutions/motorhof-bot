@@ -11,17 +11,18 @@ ENV LANG=C.UTF-8 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # rclone — официальный релиз с GitHub, фиксированная версия и контрольная сумма
+# (имена ARG не начинаются с RCLONE_: rclone принял бы их за свои флаги)
 # (пакет из Debian слишком старый: нет SHA256 у Google Drive)
-ARG RCLONE_VERSION=v1.71.1
-ARG RCLONE_SHA256=417e3da236f3a12d292da4e7287d67b1df558b8c2b280d092e563958ed724be7
+ARG RELEASE_RCLONE=v1.71.1
+ARG SHA256_RCLONE_ZIP=417e3da236f3a12d292da4e7287d67b1df558b8c2b280d092e563958ed724be7
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl unzip tzdata \
     && curl -fsSL -o /tmp/rclone.zip \
-       "https://github.com/rclone/rclone/releases/download/${RCLONE_VERSION}/rclone-${RCLONE_VERSION}-linux-amd64.zip" \
-    && echo "${RCLONE_SHA256}  /tmp/rclone.zip" | sha256sum -c - \
+       "https://github.com/rclone/rclone/releases/download/${RELEASE_RCLONE}/rclone-${RELEASE_RCLONE}-linux-amd64.zip" \
+    && echo "${SHA256_RCLONE_ZIP}  /tmp/rclone.zip" | sha256sum -c - \
     && unzip -q /tmp/rclone.zip -d /tmp \
-    && install -m 0755 "/tmp/rclone-${RCLONE_VERSION}-linux-amd64/rclone" /usr/local/bin/rclone \
-    && rm -rf /tmp/rclone.zip "/tmp/rclone-${RCLONE_VERSION}-linux-amd64" \
+    && install -m 0755 "/tmp/rclone-${RELEASE_RCLONE}-linux-amd64/rclone" /usr/local/bin/rclone \
+    && rm -rf /tmp/rclone.zip "/tmp/rclone-${RELEASE_RCLONE}-linux-amd64" \
     && apt-get purge -y curl unzip \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* \

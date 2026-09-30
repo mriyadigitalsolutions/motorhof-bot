@@ -221,3 +221,15 @@ def test_git_ignores_rclone_dir_config():
     for path in ("rclone/rclone.conf", "rclone/rclone.conf.old123", "rclone.conf", ".env", "data/x"):
         r = subprocess.run(["git", "check-ignore", "-q", "--no-index", path], cwd=ROOT)
         assert r.returncode == 0, f"git не игнорирует {path}"
+
+
+def test_dockerfile_vars_do_not_look_like_rclone_flags():
+    # rclone читает любые RCLONE_* как свои флаги, а ARG видны в RUN как переменные окружения
+    names = []
+    for op, args in dockerfile_instructions():
+        if op == "ARG":
+            names.append(args.split("=", 1)[0])
+        elif op == "ENV":
+            names += [pair.split("=", 1)[0] for pair in args.split()]
+    bad = [n for n in names if n.startswith("RCLONE_") and n != "RCLONE_CONFIG"]
+    assert not bad, f"переименуй: {bad}"
