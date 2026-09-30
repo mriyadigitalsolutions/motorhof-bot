@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T21:21:04+00:00",
+  "updatedAt": "2026-09-30T21:23:42+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -95,11 +95,17 @@ window.STATE =
         "modules/__init__.py",
         "modules/_template/"
       ],
-      "status": "review",
+      "status": "done",
       "retries": 0,
       "repairs": 0,
       "handoffs": 0,
-      "startedAt": "2026-09-30T21:13:12+00:00"
+      "startedAt": "2026-09-30T21:13:12+00:00",
+      "finishedAt": "2026-09-30T21:23:42+00:00",
+      "commit": "f19a50f",
+      "tests": {
+        "passed": 63,
+        "failed": 0
+      }
     },
     {
       "id": "02",
@@ -125,10 +131,11 @@ window.STATE =
       "zone": [
         "core/drive.py"
       ],
-      "status": "pending",
+      "status": "in-progress",
       "retries": 0,
       "repairs": 0,
-      "handoffs": 0
+      "handoffs": 0,
+      "startedAt": "2026-09-30T21:22:59+00:00"
     },
     {
       "id": "03",
@@ -161,11 +168,17 @@ window.STATE =
       "zone": [
         "modules/photos/ (convert, naming, exif, manifest)"
       ],
-      "status": "review",
+      "status": "repair",
       "retries": 0,
-      "repairs": 0,
+      "repairs": 1,
       "handoffs": 0,
-      "startedAt": "2026-09-30T21:13:12+00:00"
+      "startedAt": "2026-09-30T21:13:12+00:00",
+      "repairFindings": [
+        "тест .part не может покраснеть (BLOCKING craft)",
+        "дыра в нумерации при непрочитанном файле — R10",
+        "taken vs mtime в разных временных базах — R19",
+        "текст ошибки не по истории 19"
+      ]
     },
     {
       "id": "04",
@@ -299,7 +312,10 @@ window.STATE =
     }
   ],
   "singlePass": null,
-  "tests": null,
+  "tests": {
+    "passed": 63,
+    "failed": 0
+  },
   "debt": {
     "placeholders": [],
     "assumptions": [],
@@ -312,7 +328,24 @@ window.STATE =
     "deferred": 0,
     "note": "4 наполовину покрытых дописаны (reboot, секреты rclone, ПРОДАНО, PLAN §8); «заново» — вне рамок с объяснением; 18 «сверх брифа» — привязаны к PLAN/R##.n, админ вне списка партнёров исправлен"
   },
-  "concerns": [],
+  "concerns": [
+    "01 · core/settings.py:39 — split('#') режет значение с «#» (путь/токен); тест settings сам срезает комментарий",
+    "01 · tests/core/test_queue.py:116 — тест «одна задача за раз» не может покраснеть (последовательные await)",
+    "01 · tests/core/test_queue.py:174,205 — recover_interrupted тестируется через приватный _claim",
+    "01 · tests/core/test_settings.py:72 — «битый элемент → пустой список» не проверен смешанным входом",
+    "01 · modules/__init__.py:12 — ENABLED=['photos'] без register до таска 05; тест не вызывает register_all() по умолчанию",
+    "01 · modules/_template — MODULE объявлен дважды; текст переполнения дублирует QueueFull",
+    "01 · core/queue.py — статусы задач строковыми литералами по всему SQL",
+    "01 · tests/core/test_modules.py:27 — строка без утверждения",
+    "03 · modules/photos/__main__.py:55, manifest.py — записи манифеста голые dict, CLI лезет в files['sha256']",
+    "03 · convert.py/manifest.py/__main__.py — паттерн .part размазан; manifest.py:88 os.replace вместо pathlib",
+    "03 · __main__.py:127 — except ValueError маскирует любые ошибки под код 2",
+    "03 · manifest.py:109 — Plan.duplicates не попадает в отчёт",
+    "03 · convert.py:69-72 — значения по умолчанию quality/subsampling в коде; max_side не валидируется",
+    "03 · convert.py:16-21 — запасной путь при ImportError pillow_heif (speculative generality)",
+    "03 · convert.py:25/158 — .heif в _decode, но нет в SOURCE_SUFFIXES",
+    "03 · tests/photos/test_photos_convert.py:100 — __import__ вместо импорта; NN≥100 проверено только на out_name"
+  ],
   "reviewers": {
     "manifestSpec": "acfd6bada15842b42",
     "craft": "a7760ef0570187324"
