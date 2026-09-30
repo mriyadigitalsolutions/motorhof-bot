@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T21:51:32+00:00",
+  "updatedAt": "2026-09-30T21:53:15+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -275,11 +275,17 @@ window.STATE =
         "bot/",
         "modules/photos/handlers.py"
       ],
-      "status": "review",
+      "status": "repair",
       "retries": 0,
-      "repairs": 0,
+      "repairs": 1,
       "handoffs": 0,
-      "startedAt": "2026-09-30T21:42:54+00:00"
+      "startedAt": "2026-09-30T21:42:54+00:00",
+      "repairFindings": [
+        "доступ только на message/callback — не на все апдейты",
+        "модуль грузит свои настройки, secrets могут быть пусты",
+        "прерванная задача закрывает runs сырым UPDATE по mh",
+        "дубль с full без пояснения; /last files_done"
+      ]
     },
     {
       "id": "06",
