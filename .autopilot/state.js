@@ -1,7 +1,7 @@
 window.STATE =
 {
   "slug": "motorhof-bot-photos",
-  "dir": "2026-09-30-motorhof-bot-photos--wip",
+  "dir": "2026-09-30-motorhof-bot-photos",
   "title": "MOTORHOF: Telegram-бот, модуль photos",
   "mode": "interview",
   "depth": "deep",
@@ -11,8 +11,8 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-09-30T22:39:24+00:00",
-  "finishedAt": null,
+  "updatedAt": "2026-09-30T22:44:09+00:00",
+  "finishedAt": "2026-09-30T22:44:09+00:00",
   "stages": [
     {
       "id": "preflight",
@@ -61,8 +61,10 @@ window.STATE =
     },
     {
       "id": "final",
-      "status": "active",
-      "startedAt": "2026-09-30T22:26:34+00:00"
+      "status": "done",
+      "startedAt": "2026-09-30T22:26:34+00:00",
+      "finishedAt": "2026-09-30T22:44:09+00:00",
+      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)"
     }
   ],
   "requirements": {
@@ -407,17 +409,24 @@ window.STATE =
         "modules/photos/",
         "tests/"
       ],
-      "status": "in-progress",
+      "status": "done",
       "retries": 0,
       "repairs": 0,
       "handoffs": 1,
-      "startedAt": "2026-09-30T22:30:24+00:00"
+      "startedAt": "2026-09-30T22:30:24+00:00",
+      "finishedAt": "2026-09-30T22:44:09+00:00",
+      "commit": "5ae5c1e",
+      "tests": {
+        "passed": 245,
+        "failed": 0
+      }
     }
   ],
   "singlePass": null,
   "tests": {
-    "passed": 243,
-    "failed": 0
+    "passed": 245,
+    "failed": 0,
+    "skipped": 1
   },
   "debt": {
     "placeholders": [],
@@ -464,7 +473,10 @@ window.STATE =
     "05 · register(**kwargs) молча глотает неизвестные аргументы",
     "07 · R48: коммиты не 1:1 с тасками и с префиксами chore:/WIP: — хук среды требует коммит+push на каждой остановке; итоговая история содержит WIP-снимки",
     "06 · tests/photos_reminders/test_buttons.py:268,288 — notify подменяется присваиванием queue.notify мимо start",
-    "06 · прерванное удаление: гарантия «нет общего текста очереди» держится на задаче без адресата (chat_id/telegram_id=None) — очередь не умеет завершать задачу failed без notify"
+    "06 · прерванное удаление: гарантия «нет общего текста очереди» держится на задаче без адресата (chat_id/telegram_id=None) — очередь не умеет завершать задачу failed без notify",
+    "08 · tests/bot/conftest.py:41 — фикстура sent подключает notify через start+stop вместо set_notify",
+    "08 · handlers.register — таблица photos_job_runs гарантируется порядком вызова фабрик, а не явным ensure_schema",
+    "08 · core/settings.py:41 — значение в кавычках с комментарием после (\"a #b\" # c) режется вместе с кавычкой"
   ],
   "reviewers": {
     "manifestSpec": "abc0acae4069042f5",
