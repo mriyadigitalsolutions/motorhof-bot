@@ -194,7 +194,7 @@ class Drive:
     def _json(res: RunResult, empty: str):
         """Разбор вывода lsjson: список словарей (или словарь для --stat); иначе DriveError."""
         try:
-            data = json.loads(res.stdout or empty)
+            data = json.loads(res.stdout)  # пустой вывод при успехе — тоже непонятный ответ
         except ValueError:
             data = None
         ok = isinstance(data, dict) if empty == "{}" else (
@@ -221,7 +221,7 @@ class Drive:
             self._check(res, f"поиск в {top}")
             present += 1
             for entry in self._json(res, "[]"):
-                parts = entry.get("Path", "").split("/")
+                parts = str(entry.get("Path") or "").split("/")
                 if len(parts) != 2 or not entry.get("IsDir", True):
                     continue
                 m = _CAR_NAME.match(parts[1])

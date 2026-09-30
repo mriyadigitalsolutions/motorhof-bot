@@ -8,8 +8,11 @@
 Возможности для тестов:
 - `no_hash` — имена (или относительные пути) файлов, для которых Drive «не отдал» хэш;
   `hashes=False` — хэш не отдаётся ни для одного файла;
-- `fail(command, returncode=1, stderr=..., match=None)` — следующий подходящий вызов
-  падает с ненулевым кодом (`times` раз, по умолчанию навсегда);
+- `fail(command, returncode=1, stderr=..., match=None, times=None, stdout="", hang=False)` —
+  подходящие вызовы падают с ненулевым кодом (`times` раз, по умолчанию навсегда); с
+  `returncode=0` и `stdout` — отдают этот вывод (битый JSON); `hang=True` — «виснут»
+  (`subprocess.TimeoutExpired`, как `subprocess_runner` по таймауту);
+- путь после `<remote>:` с `..` или вне `base` — ошибка rclone (код 1), за пределы `base` фейк не ходит;
 - `calls` — журнал всех вызовов (списки аргументов), `trashed` — что ушло в корзину.
 """
 from __future__ import annotations
@@ -17,6 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -31,6 +35,10 @@ def fake_id(rel: str) -> str:
     return "id" + hashlib.sha1(rel.encode("utf-8")).hexdigest()[:16]
 
 
+class _Outside(Exception):
+    """Путь на «remote» выходит за пределы base."""
+
+
 @dataclass
 class _Failure:
     command: str
@@ -38,6 +46,8 @@ class _Failure:
     stderr: str
     match: str | None
     times: int | None
+    stdout: str = ""
+    hang: bool = False
 
 
 @dataclass
@@ -48,6 +58,7 @@ class FakeRclone:
     no_hash: set[str] = field(default_factory=set)
     calls: list[list[str]] = field(default_factory=list)
     trashed: list[str] = field(default_factory=list)
+    timeouts: list[float | None] = field(default_factory=list)
     _failures: list[_Failure] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -63,9 +74,11 @@ class FakeRclone:
         stderr: str = "ERROR : ошибка rclone",
         match: str | None = None,
         times: int | None = None,
+        stdout: str = "",
+        hang: bool = False,
     ) -> None:
         """Вызовы `command` (подстрока `match` в аргументах, если задана) завершатся ошибкой."""
-        self._failures.append(_Failure(command, returncode, stderr, match, times))
+        self._failures.append(_Failure(command, returncode, stderr, match, times, stdout, hang))
 
     def commands(self, command: str | None = None) -> list[list[str]]:
         """Журнал вызовов без имени бинаря; по желанию только одной команды."""
@@ -74,9 +87,13 @@ class FakeRclone:
 
     # --- runner ---
 
-    def __call__(self, args: list[str]) -> RunResult:
+    # флаги rclone, у которых есть значение отдельным аргументом
+    VALUE_FLAGS = {"--max-depth", "--hash-type", "--timeout", "--config"}
+
+    def __call__(self, args: list[str], timeout: float | None = None) -> RunResult:
         args = list(args)
         self.calls.append(args)
+        self.timeouts.append(timeout)
         assert all(isinstance(a, str) for a in args), "аргументы — только строки"
         cmd, rest = args[1], args[2:]
         for f in self._failures:
@@ -85,9 +102,23 @@ class FakeRclone:
                     if f.times <= 0:
                         continue
                     f.times -= 1
-                return RunResult(f.returncode, "", NOTICE + "\n" + f.stderr + "\n")
-        flags = [a for a in rest if a.startswith("-")]
-        paths = [a for a in rest if not a.startswith("-")]
+                if f.hang:
+                    raise subprocess.TimeoutExpired(args, timeout or 0)
+                return RunResult(f.returncode, f.stdout, NOTICE + "\n" + f.stderr + "\n")
+        flags: list[str] = []
+        paths: list[str] = []
+        it = iter(rest)
+        for a in it:
+            if a in self.VALUE_FLAGS:
+                flags.append(f"{a}={next(it, '')}")
+            elif a.startswith("-"):
+                flags.append(a)
+            else:
+                paths.append(a)
+        try:
+            [self._local(p) for p in paths]
+        except _Outside as exc:
+            return RunResult(1, "", NOTICE + f"\nERROR : path outside remote: {exc}\n")
         handler = getattr(self, "_cmd_" + cmd, None)
         if handler is None:
             return RunResult(1, "", f"unknown command {cmd!r}\n")
@@ -98,7 +129,13 @@ class FakeRclone:
     def _local(self, spec: str) -> Path:
         prefix = self.remote + ":"
         if spec.startswith(prefix):
-            return self.base / spec[len(prefix):]
+            rel = spec[len(prefix):]
+            if ".." in rel.replace("\\", "/").split("/") or rel.startswith("/"):
+                raise _Outside(rel)
+            path = self.base / rel
+            if not path.resolve().is_relative_to(self.base.resolve()):
+                raise _Outside(rel)
+            return path
         return Path(spec)
 
     def _rel(self, path: Path) -> str:

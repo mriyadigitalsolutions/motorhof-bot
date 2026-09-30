@@ -154,12 +154,14 @@ def test_pull_and_push_one_file(base, drive, fake, tmp_path):
     assert local.read_bytes() == b"abc"
     out = tmp_path / "MH_1022_01.jpg"
     out.write_bytes(b"v1")
+    before = len(fake.calls)
     drive.push(out, f"{drive.output_dir(car)}/MH_1022_01.jpg")
     out.write_bytes(b"v2")
     drive.push(out, f"{drive.output_dir(car)}/MH_1022_01.jpg")
     assert [p.name for p in (photos / "На выгрузку").iterdir()] == ["MH_1022_01.jpg"]
     assert (photos / "На выгрузку" / "MH_1022_01.jpg").read_bytes() == b"v2"
-    assert all(c[0] == "copyto" for c in fake.commands("copyto"))
+    # push — ровно по одному copyto на файл, никаких других вызовов rclone
+    assert [c[1] for c in fake.calls[before:]] == ["copyto", "copyto"]
 
 
 def test_mkdir_returns_id_and_link(base, drive):
@@ -237,3 +239,77 @@ def test_ambiguous_message_shows_top_folder_for_each_path(base, drive):
     text = str(exc.value)
     assert "MH_AUTO_НАЛИЧИЕ/2026/MH_1022_Mazda" in text
     assert "MH_AUTO_ПРОДАНО/2026/MH_1022_Mazda" in text
+
+
+# --- дозапрос ревью ---
+
+@pytest.mark.parametrize("code", ["MH", "MH_", "1022", "MH_1022_", "XX_1022", "MH_10a", ""])
+def test_find_car_rejects_malformed_code(base, drive, fake, code):
+    make_car(base, "MH_AUTO_НАЛИЧИЕ", "2026", "MH_1022_A")
+    with pytest.raises(ValueError):
+        drive.find_car(code)
+    assert fake.calls == []
+
+
+def test_remote_name_is_never_a_local_folder(base, fake, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "motorhof").mkdir()  # каталог с именем remote в текущей папке
+    d = Drive("motorhof", "MOTORHOF_AUTO", runner=fake)
+    assert d.spec("MH_AUTO_НАЛИЧИЕ") == "motorhof:MOTORHOF_AUTO/MH_AUTO_НАЛИЧИЕ"
+    make_car(base, "MH_AUTO_НАЛИЧИЕ", "2026", "MH_1022_A")
+    assert d.find_car("MH_1022").name == "MH_1022_A"
+    # явный локальный режим: пустой remote или путь
+    assert Drive("", "корень", runner=fake).spec("a") == "корень/a"
+    assert Drive("./диск", "корень", runner=fake).spec("a") == "диск/корень/a"
+
+
+def test_runner_gets_timeout_default_1800(base, drive, fake):
+    make_car(base, "MH_AUTO_НАЛИЧИЕ", "2026", "MH_1022_A")
+    drive.find_car("MH_1022")
+    assert fake.timeouts == [1800] * 4
+    Drive("motorhof", "MOTORHOF_AUTO", runner=fake, timeout=5).find_car("MH_1022")
+    assert fake.timeouts[-4:] == [5] * 4
+
+
+def test_timeout_becomes_drive_error(base, fake):
+    make_car(base, "MH_AUTO_НАЛИЧИЕ", "2026", "MH_1022_A")
+    fake.fail("lsjson", hang=True)
+    with pytest.raises(DriveError) as exc:
+        Drive("motorhof", "MOTORHOF_AUTO", runner=fake, timeout=60).find_car("MH_1022")
+    assert "не ответил за 60 с" in str(exc.value)
+
+
+def test_subprocess_runner_honours_timeout():
+    import subprocess
+    import sys
+
+    from core.drive import subprocess_runner
+
+    with pytest.raises(subprocess.TimeoutExpired):
+        subprocess_runner([sys.executable, "-c", "import time; time.sleep(5)"], timeout=0.3)
+
+
+@pytest.mark.parametrize(
+    "op,stdout",
+    [
+        ("find", "не json"),
+        ("find", '{"Path": "2026"}'),
+        ("find", "[1, 2]"),
+        ("list", "[\n"),
+        ("list", '[{"Size": 1}]'),
+        ("list", '[{"Name": "a.jpg", "Size": "много"}]'),
+        ("folder_id", "[]"),
+        ("folder_id", ""),
+    ],
+)
+def test_bad_json_from_rclone_is_drive_error(base, drive, fake, op, stdout):
+    make_car(base, "MH_AUTO_НАЛИЧИЕ", "2026", "MH_1022_A")
+    path = "MH_AUTO_НАЛИЧИЕ/2026/MH_1022_A/Фотографии"
+    fake.fail("lsjson", returncode=0, stdout=stdout)
+    action = {
+        "find": lambda: drive.find_car("MH_1022"),
+        "list": lambda: drive.list_files(path),
+        "folder_id": lambda: drive.folder_id(path),
+    }[op]
+    with pytest.raises(DriveError):
+        action()
