@@ -250,3 +250,45 @@ async def test_fotos_resets_pending_admin(asked, service, queue, outbox):
     outbox.messages.clear()
     await service.press(ok, ADMIN, "Админ", Access())
     assert outbox.to(ADMIN) == ["Запрос устарел"] and queue.status().queued == []
+
+
+def _leaky_notify(outbox):
+    """notify, который НЕ пропускает задачи без чата: пишет в chat_id или telegram_id задачи."""
+    async def notify(job, text):
+        target = job.chat_id if job.chat_id is not None else job.telegram_id
+        await outbox(target, text)
+    return notify
+
+
+async def test_drive_error_on_find_car_fails_request_and_tells_both(asked, service, queue, fake,
+                                                                     outbox, db):
+    buttons = await _ask(service, outbox)
+    await service.press(buttons["Удалить"], PARTNER, "Анна", Access())
+    await service.press(dict(outbox.buttons(ADMIN))["Подтвердить"], ADMIN, "Админ", Access())
+    queue.notify = _leaky_notify(outbox)
+    fake.fail("lsjson", stderr="ERROR : connection reset")
+    outbox.messages.clear()
+    await queue.run_next()
+    text = ("MH_1022: удалить DNG не удалось: rclone упал (поиск в MH_AUTO_НАЛИЧИЕ, код 1). "
+            "Файлы не тронуты или удалены частично — проверь папку.")
+    assert outbox.to(PARTNER) == [text] and outbox.to(ADMIN) == [text]
+    assert fake.trashed == []
+    req = db.fetchone("SELECT status FROM photos_dng_requests ORDER BY id DESC LIMIT 1")
+    assert req["status"] == "failed"
+    assert service.state("MH_1022") == "idle"
+    assert queue.get(1).status == "failed"
+    assert not any("задача упала" in t for c, t, _ in outbox.messages if c is not None)
+
+
+async def test_failure_generic_queue_text_reaches_nobody_even_if_notify_sends(
+        asked, service, queue, fake, outbox):
+    buttons = await _ask(service, outbox)
+    await service.press(buttons["Удалить"], PARTNER, "Анна", Access())
+    await service.press(dict(outbox.buttons(ADMIN))["Подтвердить"], ADMIN, "Админ", Access())
+    queue.notify = _leaky_notify(outbox)
+    fake.fail("deletefile", stderr="ERROR : quota exceeded")
+    outbox.messages.clear()
+    await queue.run_next()
+    assert queue.get(1).status == "failed"
+    assert len(outbox.to(PARTNER)) == 1 and len(outbox.to(ADMIN)) == 1
+    assert not any("задача упала" in t for c, t, _ in outbox.messages if c is not None)

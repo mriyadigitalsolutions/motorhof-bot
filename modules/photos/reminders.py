@@ -175,6 +175,7 @@ class Reminders:
         self.clock = clock or queue.clock
         self.sender: Sender | None = None
         self._deferred: list[tuple[int, str]] = []
+        self._tasks: set[asyncio.Task] = set()  # ссылки до завершения, иначе GC может снять задачу
         self.db.ensure_schema(SCHEMA)
         cols = {r["name"] for r in self.db.fetchall("PRAGMA table_info(photos_dng_requests)")}
         if "pending_at" not in cols:  # таблица из версии до pending_at
@@ -193,7 +194,12 @@ class Reminders:
         except RuntimeError:
             return
         pending, self._deferred = self._deferred, []
-        loop.create_task(self._flush(pending))
+        self._spawn(loop, self._flush(pending))
+
+    def _spawn(self, loop: asyncio.AbstractEventLoop, coro) -> None:
+        task = loop.create_task(coro)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
 
     async def _flush(self, pending: list[tuple[int, str]]) -> None:
         for chat_id, text in pending:
@@ -210,7 +216,7 @@ class Reminders:
         if self.sender is None or loop is None:
             self._deferred.append((chat_id, text))
             return
-        loop.create_task(self._send(chat_id, text))
+        self._spawn(loop, self._send(chat_id, text))
 
     async def _send(self, chat_id: int | None, text: str, buttons: list[Button] | None = None) -> bool:
         """True — сообщение ушло; ошибка отправки только в лог."""
@@ -439,10 +445,10 @@ class Reminders:
     async def _on_ok(self, req: DngRequest, user_id: int, user_name: str, access: AccessLike,
                      chat_id: int) -> None:
         try:
-            # chat_id задачи пуст: все сообщения удаления идут через sender обоим адресатам,
-            # общий «задача упала» от очереди никому не приходит (notify бота пропускает).
+            # У задачи нет адресата (chat_id и telegram_id пусты): все сообщения удаления идут
+            # через sender обоим, а общему «задача упала» от очереди некуда уйти при любом notify.
             result = self.queue.enqueue(MODULE, KIND_DELETE, {"key": req.code, "request_id": req.id},
-                                        None, req.addressee, req.requester_name)
+                                        None, None, req.requester_name)
         except QueueFull as e:
             await self._send(chat_id, f"Очередь переполнена ({e.limit}), попробуй позже")
             return
@@ -465,26 +471,33 @@ class Reminders:
                 await self._send(c, text)
 
         try:
+            await self._delete_request(req, tell)
+        except Exception as e:
+            # единая точка сбоя: find_car, list_files, pull, удаление, манифест, таймаут rclone
+            log.exception("%s: удаление DNG не выполнено", req.code)
+            try:
+                self._finish(req, "failed")
+            except Exception:
+                log.exception("%s: статус запроса на удаление DNG не записан", req.code)
+            await tell(failed_text(req.code, _reason(e)))
+            raise DeleteFailed(req.code) from e
+        return None
+
+    async def _delete_request(self, req: DngRequest,
+                              tell: Callable[[str], Awaitable[None]]) -> None:
+        try:
             car = await asyncio.to_thread(self.drive.find_car, req.code)
         except (CarNotFound, CarAmbiguous) as e:
             log.warning("%s: удаление DNG не выполнено: %s", req.code, e)
             self._finish(req, "stale")
             await tell(f"{req.code}: {TEXT_STALE}")
-            return None
-        try:
-            done = await asyncio.to_thread(self._delete, car)
-        except Exception as e:
-            log.exception("%s: удаление DNG не выполнено", req.code)
-            self._finish(req, "failed")
-            await tell(failed_text(req.code, _reason(e)))
-            raise DeleteFailed(req.code) from e
-        if done.count == 0:
-            self._finish(req, "done")
-            await tell(f"{req.code}: {TEXT_DONE}")
-            return None
+            return
+        done = await asyncio.to_thread(self._delete, car)
         self._finish(req, "done")
-        await tell(deleted_text(req.code, done.count, done.size))
-        return None
+        if done.count == 0:
+            await tell(f"{req.code}: {TEXT_DONE}")
+        else:
+            await tell(deleted_text(req.code, done.count, done.size))
 
     def _delete(self, car: CarFolder) -> DngSet:
         with self._scratch(car, strict=True) as (tmp, dngs):
@@ -492,7 +505,7 @@ class Reminders:
 
     def interrupted(self, job: Job) -> str:
         """on_interrupted для KIND_DELETE: запрос устарел, машина снова idle и спрашивается на
-        ближайшей проверке. Текст — партнёру (через notify очереди) и админу (через sender)."""
+        ближайшей проверке. Текст — партнёру и админу через sender (у задачи нет адресата)."""
         req = self._request(int(job.payload.get("request_id") or 0))
         code = req.code if req else (job.key or "")
         text = interrupted_text(code)
