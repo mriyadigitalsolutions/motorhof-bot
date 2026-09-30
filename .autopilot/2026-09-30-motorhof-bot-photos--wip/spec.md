@@ -273,7 +273,7 @@
 | `TELEGRAM_BOT_TOKEN` | `.env` | токен от BotFather с аккаунта OG |
 | `ALLOWED_TELEGRAM_IDS` | `.env` | три ID через запятую |
 | `ADMIN_TELEGRAM_IDS` | `.env` | ID администратора |
-| `rclone.conf` | корень проекта на сервере | `rclone config`, remote `motorhof` |
+| `rclone.conf` | `rclone/rclone.conf` в папке проекта на сервере (D01) | `rclone config`, remote `motorhof` |
 | Приёмка цвета DNG/HEIC «на мониторе» | PLAN фаза 1 | посмотреть образцы из тестового прогона |
 
 ## Покрытие манифеста
