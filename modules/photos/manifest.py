@@ -168,10 +168,11 @@ class Manifest:
         sources = list(sources)
         existing = set(existing_outputs)
         failed: dict[str, tuple[str, str]] = {}  # sha256 → (имя, причина)
+        excluded: set[str] = set()  # только новые (без номера) упавшие исходники
         done: list[RenderItem] = []
         first: Plan | None = None
         while True:
-            plan = self.plan([s for s in sources if s.sha256 not in failed], variants, existing)
+            plan = self.plan([s for s in sources if s.sha256 not in excluded], variants, existing)
             first = first or plan
             restart = False
             for item in plan.to_render:
@@ -183,6 +184,7 @@ class Manifest:
                 except ConvertError as e:
                     failed[sha] = (item.source.name, str(e))
                     if self._nn_of(sha) is None:  # номер ещё не закреплён — пересчитать план
+                        excluded.add(sha)
                         restart = True
                         break
                     continue

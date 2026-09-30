@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .convert import SOURCE_SUFFIXES, ConvertError, Variant, load_variants, read_meta, to_jpeg
-from .manifest import Manifest, ManifestCorrupt, Source
+from .manifest import Manifest, ManifestCorrupt, RenderItem, Source
 
 MANIFEST_NAME = "_manifest.json"
 
@@ -67,7 +67,8 @@ def run_local(in_dir: Path, out_dir: Path, mh: str, extra_variants: list[str] | 
     for stale in out_dir.glob("*.part"):  # остатки прерванного запуска
         stale.unlink()
     existing = {p.name for p in out_dir.iterdir() if p.is_file()}
-    def render(item) -> None:
+
+    def render(item: RenderItem) -> None:
         to_jpeg(in_dir / item.source.name, item.variant, out_dir / item.out_name)
 
     ex = manifest.execute(sources, variants, existing, render)
