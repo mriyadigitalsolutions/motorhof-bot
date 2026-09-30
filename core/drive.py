@@ -13,11 +13,14 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Callable, Iterable, NamedTuple
+from typing import TYPE_CHECKING, Callable, Iterable, NamedTuple
 
 from core.log import redact
+
+if TYPE_CHECKING:
+    from core.settings import Settings
 
 # Четыре корневые папки и что они значат.
 TOPS: dict[str, str] = {
@@ -28,6 +31,8 @@ TOPS: dict[str, str] = {
 }
 
 _CAR_NAME = re.compile(r"^((?:MH|KO)_\d+)_")
+_CODE = re.compile(r"^(?:MH|KO)_\d+$")
+DEFAULT_TIMEOUT = 1800  # секунд на один вызов rclone
 _STDERR_TAIL = 5
 
 
@@ -37,13 +42,14 @@ class RunResult(NamedTuple):
     stderr: str
 
 
-Runner = Callable[[list[str]], RunResult]
+Runner = Callable[..., RunResult]  # runner(args: list[str], timeout: float) -> RunResult
 
 
-def subprocess_runner(args: list[str]) -> RunResult:
-    """Запуск rclone: список аргументов, без shell, UTF-8."""
+def subprocess_runner(args: list[str], timeout: float = DEFAULT_TIMEOUT) -> RunResult:
+    """Запуск rclone: список аргументов, без shell, UTF-8. Истёк таймаут → subprocess.TimeoutExpired."""
     proc = subprocess.run(
-        args, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False
+        args, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False,
+        timeout=timeout,
     )
     return RunResult(proc.returncode, proc.stdout, proc.stderr)
 
@@ -128,6 +134,7 @@ class Drive:
         output_subdir: str = "На выгрузку",
         rclone: str = "rclone",
         secrets: Iterable[str] = (),
+        timeout: float = DEFAULT_TIMEOUT,
     ) -> None:
         self.remote = remote.rstrip(":")
         self.root = root
@@ -137,9 +144,10 @@ class Drive:
         self.rclone = rclone
         self.secrets = [s for s in secrets if s]
         self.local = self._is_local(remote)
+        self.timeout = timeout
 
     @classmethod
-    def from_settings(cls, settings, runner: Runner = subprocess_runner, **kw) -> "Drive":
+    def from_settings(cls, settings: "Settings", runner: Runner = subprocess_runner, **kw) -> "Drive":
         return cls(
             settings.rclone_remote,
             settings.drive_root,
@@ -152,7 +160,8 @@ class Drive:
 
     @staticmethod
     def _is_local(remote: str) -> bool:
-        return remote == "" or Path(remote).is_dir()
+        """Локальная папка — только явно: пустой remote или путь с «/». Имя remote — никогда."""
+        return remote == "" or "/" in remote
 
     # --- адреса и запуск ---
 
@@ -164,7 +173,13 @@ class Drive:
         return f"{self.remote}:" + "/".join(_split(self.root) + parts)
 
     def _run(self, *args: str) -> RunResult:
-        return self.runner([self.rclone, *args])
+        cmd = [self.rclone, *args]
+        try:
+            return self.runner(cmd, timeout=self.timeout)
+        except subprocess.TimeoutExpired:
+            raise DriveError(
+                f"rclone не ответил за {int(self.timeout)} с ({args[0]}). Проверь сеть и доступ к Drive, потом повтори."
+            ) from None
 
     def _check(self, result: RunResult, what: str) -> RunResult:
         if result.returncode != 0:
@@ -176,13 +191,27 @@ class Drive:
         return result
 
     @staticmethod
+    def _json(res: RunResult, empty: str):
+        """Разбор вывода lsjson: список словарей (или словарь для --stat); иначе DriveError."""
+        try:
+            data = json.loads(res.stdout or empty)
+        except ValueError:
+            data = None
+        ok = isinstance(data, dict) if empty == "{}" else (
+            isinstance(data, list) and all(isinstance(e, dict) for e in data)
+        )
+        if not ok:
+            raise DriveError("rclone вернул непонятный ответ (не JSON). Повтори позже.")
+        return data
+
+    @staticmethod
     def _missing(result: RunResult) -> bool:
         return result.returncode == 3 or "directory not found" in result.stderr
 
     # --- поиск машины ---
 
-    def _scan(self) -> tuple[list[CarFolder], int]:
-        """Все папки машин глубины 2 во всех четырёх корнях; вторым — сколько корней нашлось."""
+    def _scan(self) -> list[CarFolder]:
+        """Все папки машин глубины 2 во всех четырёх корнях."""
         cars: list[CarFolder] = []
         present = 0
         for top, kind in TOPS.items():
@@ -191,7 +220,7 @@ class Drive:
                 continue  # нет такой корневой папки — ищем в остальных
             self._check(res, f"поиск в {top}")
             present += 1
-            for entry in json.loads(res.stdout or "[]"):
+            for entry in self._json(res, "[]"):
                 parts = entry.get("Path", "").split("/")
                 if len(parts) != 2 or not entry.get("IsDir", True):
                     continue
@@ -212,11 +241,12 @@ class Drive:
             raise DriveError(
                 "Не найдена ни одна из папок наличия/проданных в корне Drive. Проверь DRIVE_ROOT и доступ rclone."
             )
-        return cars, present
+        return cars
 
     def find_car(self, code: str) -> CarFolder:
-        cars, _ = self._scan()
-        found = [c for c in cars if c.name.startswith(code + "_")]
+        if not _CODE.match(code):
+            raise ValueError(f"код машины должен быть вида MH_1022 или KO_2001: {code!r}")
+        found = [c for c in self._scan() if c.code == code]
         if not found:
             raise CarNotFound(code)
         if len(found) > 1:
@@ -224,7 +254,7 @@ class Drive:
         return found[0]
 
     def locate_all(self) -> dict[str, CarFolder]:
-        cars, _ = self._scan()
+        cars = self._scan()
         groups: dict[str, list[CarFolder]] = {}
         for car in cars:
             groups.setdefault(car.code, []).append(car)
@@ -232,7 +262,7 @@ class Drive:
         for code, items in groups.items():
             first = items[0]
             if len(items) > 1:
-                first = CarFolder(**{**first.__dict__, "ambiguous": tuple(c.path for c in items)})
+                first = replace(first, ambiguous=tuple(c.path for c in items))
             result[code] = first
         return result
 
@@ -255,13 +285,17 @@ class Drive:
             "список файлов",
         )
         files = []
-        for e in json.loads(res.stdout or "[]"):
+        for e in self._json(res, "[]"):
             if e.get("IsDir") or "/" in e.get("Path", e.get("Name", "")):
                 continue
+            try:
+                name, size = str(e["Name"]), int(e.get("Size", 0))
+            except (KeyError, TypeError, ValueError):
+                raise DriveError("rclone вернул непонятный ответ (не JSON). Повтори позже.") from None
             files.append(
                 RemoteFile(
-                    name=e["Name"],
-                    size=int(e.get("Size", 0)),
+                    name=name,
+                    size=size,
                     sha256=((e.get("Hashes") or {}).get("sha256") or None),
                     mtime=e.get("ModTime", ""),
                     id=e.get("ID") or None,
@@ -278,7 +312,8 @@ class Drive:
 
     def folder_id(self, path: str) -> str | None:
         res = self._check(self._run("lsjson", self.spec(path), "--stat"), "ID папки")
-        return (json.loads(res.stdout or "{}") or {}).get("ID") or None
+        data = self._json(res, "{}")
+        return data.get("ID") or None
 
     @staticmethod
     def folder_link(folder_id: str | None) -> str | None:
