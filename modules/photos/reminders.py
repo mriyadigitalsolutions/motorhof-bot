@@ -142,6 +142,15 @@ def _reason(e: Exception) -> str:
     return text.splitlines()[0] if text.strip() else type(e).__name__
 
 
+def expired_text(code: str, days: int) -> str:
+    return (f"{code}: администратор не ответил за {REMIND_AFTER_DAYS} {_plural_days(REMIND_AFTER_DAYS)}, "
+            f"удаление не выполнено. Спрошу снова через {days} {_plural_days(days)}.")
+
+
+class DeleteFailed(Exception):
+    """Удаление не удалось; партнёру и админу уже написано — задача очереди завершается failed."""
+
+
 def parse_data(data: str | None) -> tuple[str, int] | None:
     """`ph:del:17` → ("del", 17); чужое или битое → None."""
     parts = (data or "").split(":")
@@ -165,12 +174,43 @@ class Reminders:
         self.days = days
         self.clock = clock or queue.clock
         self.sender: Sender | None = None
+        self._deferred: list[tuple[int, str]] = []
         self.db.ensure_schema(SCHEMA)
+        cols = {r["name"] for r in self.db.fetchall("PRAGMA table_info(photos_dng_requests)")}
+        if "pending_at" not in cols:  # таблица из версии до pending_at
+            self.db.execute("ALTER TABLE photos_dng_requests ADD COLUMN pending_at TEXT")
 
     # ---------- отправка ----------
 
     def set_sender(self, sender: Sender | None) -> None:
+        """Подключает отправку; отложенные сообщения (например, о прерванном удалении при
+        старте, до startup бота) уходят сразу, если есть event loop."""
         self.sender = sender
+        if sender is None or not self._deferred:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        pending, self._deferred = self._deferred, []
+        loop.create_task(self._flush(pending))
+
+    async def _flush(self, pending: list[tuple[int, str]]) -> None:
+        for chat_id, text in pending:
+            await self._send(chat_id, text)
+
+    def _send_later(self, chat_id: int | None, text: str) -> None:
+        """Отправить, как только будет sender и event loop; до тех пор — держать."""
+        if chat_id is None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if self.sender is None or loop is None:
+            self._deferred.append((chat_id, text))
+            return
+        loop.create_task(self._send(chat_id, text))
 
     async def _send(self, chat_id: int | None, text: str, buttons: list[Button] | None = None) -> bool:
         """True — сообщение ушло; ошибка отправки только в лог."""
@@ -283,6 +323,7 @@ class Reminders:
                 self._set_request(req.id, status="expired")
                 self._update_car(code, state="idle", next_ask_at=self._later(now),
                                  pending_request_id=None, reminded=0)
+                await self._send(req.chat_id, expired_text(code, self.days))
             return
         if row["state"] != "idle":
             return
@@ -398,8 +439,10 @@ class Reminders:
     async def _on_ok(self, req: DngRequest, user_id: int, user_name: str, access: AccessLike,
                      chat_id: int) -> None:
         try:
+            # chat_id задачи пуст: все сообщения удаления идут через sender обоим адресатам,
+            # общий «задача упала» от очереди никому не приходит (notify бота пропускает).
             result = self.queue.enqueue(MODULE, KIND_DELETE, {"key": req.code, "request_id": req.id},
-                                        req.chat_id, req.addressee, req.requester_name)
+                                        None, req.addressee, req.requester_name)
         except QueueFull as e:
             await self._send(chat_id, f"Очередь переполнена ({e.limit}), попробуй позже")
             return
@@ -434,7 +477,7 @@ class Reminders:
             log.exception("%s: удаление DNG не выполнено", req.code)
             self._finish(req, "failed")
             await tell(failed_text(req.code, _reason(e)))
-            return None
+            raise DeleteFailed(req.code) from e
         if done.count == 0:
             self._finish(req, "done")
             await tell(f"{req.code}: {TEXT_DONE}")
@@ -460,11 +503,8 @@ class Reminders:
         if car is not None and car["pending_request_id"] == req.id:
             self._update_car(req.code, state="idle", pending_request_id=None, reminded=0,
                              next_ask_at=self._now().isoformat())
-        if req.admin_id is not None and req.admin_id != job.chat_id:
-            try:
-                asyncio.get_running_loop().create_task(self._send(req.admin_id, text))
-            except RuntimeError:
-                log.warning("%s: админу не сообщено о прерванном удалении (нет event loop)", code)
+        for chat_id in dict.fromkeys([req.chat_id, req.admin_id]):
+            self._send_later(chat_id, text)
         return text
 
     def _finish(self, req: DngRequest, status: str) -> None:

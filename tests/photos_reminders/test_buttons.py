@@ -185,6 +185,9 @@ async def test_delete_failure_tells_both(asked, service, queue, fake, outbox):
             "Файлы не тронуты или удалены частично — проверь папку.")
     assert outbox.to(PARTNER) == [text] and outbox.to(ADMIN) == [text]
     assert service.state("MH_1022") == "idle"
+    job = queue.get(1)
+    assert (job.kind, job.status) == (KIND_DELETE, "failed")
+    assert not any("задача упала" in t for _, t, _ in outbox.messages)
 
 
 async def test_interrupted_delete_returns_to_idle_and_tells_both(asked, service, queue, db, outbox):
@@ -199,11 +202,16 @@ async def test_interrupted_delete_returns_to_idle_and_tells_both(asked, service,
     async def notify(job, text):
         notified.append((job.chat_id, text))
 
+    service.set_sender(None)  # как в боте: recover идёт до startup, отправки ещё нет
     await queue.start(notify)
     await queue.stop()
     await asyncio.sleep(0)
     text = "MH_1022: удаление DNG прервано перезапуском сервера, спрошу снова."
-    assert notified == [(PARTNER, text)] and outbox.to(ADMIN) == [text]
+    assert outbox.messages == []
+    service.set_sender(outbox)  # startup бота
+    await asyncio.sleep(0)
+    assert outbox.to(PARTNER) == [text] and outbox.to(ADMIN) == [text]
+    assert all(chat is None for chat, _ in notified)  # общий notify очереди никому не пишет
     assert service.state("MH_1022") == "idle"
     outbox.messages.clear()
     await service.press(ok, ADMIN, "Админ", Access())
@@ -219,9 +227,12 @@ async def test_pending_admin_expires_after_7_days(asked, service, queue, outbox,
     clock.advance(days=6)
     await service.check()
     assert service.state("MH_1022") == "pending_admin"
+    outbox.messages.clear()
     clock.advance(days=1)
     await service.check()
     assert service.state("MH_1022") == "idle"
+    assert outbox.to(PARTNER) == ["MH_1022: администратор не ответил за 7 дней, удаление не "
+                                  "выполнено. Спрошу снова через 60 дней."]
     outbox.messages.clear()
     await service.press(ok, ADMIN, "Админ", Access())
     assert outbox.to(ADMIN) == ["Запрос устарел"] and queue.status().queued == []

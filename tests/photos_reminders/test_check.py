@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import shutil
 
+from modules.photos.reminders import Reminders
 from tests.photos_reminders.conftest import MB, PARTNER, Access, add_converted, car_dir, move
 
 
@@ -148,3 +149,17 @@ async def test_question_not_sent_keeps_car_idle_until_next_night(base, service, 
     assert service.state("MH_1022") == "asked"
     assert outbox.to(PARTNER) == [
         "MH_1022: 2 DNG (2 МБ) сконвертированы 62 дня назад. Удалить исходники?"]
+
+
+def test_schema_upgrades_old_requests_table(tmp_path, queue, drive, db):
+    db.execute("CREATE TABLE photos_dng_requests (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+               " code TEXT NOT NULL, created_at TEXT NOT NULL, addressee INTEGER, chat_id INTEGER,"
+               " dng_count INTEGER NOT NULL, dng_bytes INTEGER NOT NULL, status TEXT NOT NULL,"
+               " requester_name TEXT, admin_id INTEGER)")
+    db.execute("INSERT INTO photos_dng_requests (code, created_at, dng_count, dng_bytes, status)"
+               " VALUES ('MH_1022', '2026-09-30T10:00:00+00:00', 1, 1, 'asked')")
+    Reminders(queue, drive, tmp_path)
+    Reminders(queue, drive, tmp_path)  # повторно — без ошибки
+    cols = [r["name"] for r in db.fetchall("PRAGMA table_info(photos_dng_requests)")]
+    assert "pending_at" in cols
+    assert db.fetchone("SELECT pending_at FROM photos_dng_requests")["pending_at"] is None
