@@ -1,0 +1,15 @@
+.env
+rclone.conf
+data/
+tests/fixtures/*.DNG
+tests/fixtures/*.dng
+tests/fixtures/*.HEIC
+tests/fixtures/*.heic
+__pycache__/
+*.pyc
+.pytest_cache/
+.autopilot/serve.*
+.env.*
+!.env.example
+node_modules/
+.DS_Store
