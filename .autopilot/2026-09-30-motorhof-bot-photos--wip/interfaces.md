@@ -66,3 +66,15 @@
 - Тесты: `/home/user/venv-motorhof/bin/python -m pytest -q`; `tests/core/`
 - (доработка 03) `convert.UNREADABLE = "файл повреждён или не читается"` — любой нечитаемый исходник → `ConvertError(UNREADABLE)`; `exif.DATETIME = 0x0132`; `naming.sort_key` сравнивает всё в наивном местном времени процесса.
 - (доработка 03) **Рендерить через** `Manifest.execute(sources, variants, existing_outputs, render: Callable[[RenderItem], None]) -> Execution(first_plan, plan, done, errors[(имя, причина)])` — render бросает `ConvertError` → исходник исключается, план пересчитывается, дыр в номерах нет. Голую пару plan/apply для рендера не использовать. `run_local` уже на `execute`.
+
+### Из таска 02 — Drive-слой (core/drive.py, tests/fakes/)
+
+- `Drive(remote, root, runner=subprocess_runner, source_subdir="Фотографии", output_subdir="На выгрузку", rclone="rclone", secrets=())`; `Drive.from_settings(settings, runner=...)`; пустой remote или локальная папка → работа по локальной папке.
+- `find_car(code) -> CarFolder`; `locate_all() -> dict[str, CarFolder]`; `source_dir(car) -> str`; `output_dir(car) -> str`; `list_files(path) -> list[RemoteFile]` (только файлы глубины 1, без фильтра расширений — фильтр в модуле); `pull(path, local) -> Path`; `push(local, path)`; `mkdir(path) -> id|None`; `folder_id(path)`; `exists(path) -> bool`; `folder_link(id|None) -> str|None` (static); `delete_to_trash(path)`; `spec(path) -> str`.
+- Пути — строки относительно корня: `<top>/<год>/<машина>/...`.
+- `CarFolder(code, name, path, kind: "stock"|"sold", year, id=None, ambiguous=())` frozen; `RemoteFile(name, size, sha256|None, mtime: str ISO, id=None)`.
+- Исключения: `CarNotFound(code)` (текст истории 7), `CarAmbiguous(code, paths)` (текст истории 8), `DriveError(message, stderr_tail, returncode)` (stderr уже через redact); вне разрешённых путей → `PermissionError` без вызова rclone. Нет ни одной из 4 корневых папок → `DriveError`.
+- Писать можно только в `<машина>/Фотографии/На выгрузку/`; удалять — только `*.dng` прямо в `<машина>/Фотографии/`.
+- Нет sha256 от Drive → job сам скачивает и хэширует. Нет `Фотографии` → job проверяет `exists` и пишет текст истории 9.
+- Runner: `(args: list[str]) -> RunResult(returncode, stdout, stderr)`; `TOPS`.
+- Фейк: `tests/fakes/fake_rclone.py`: `FakeRclone(base, remote="motorhof", hashes=True, no_hash=set())`, `.fail(command, returncode=1, stderr=..., match=None, times=None)`, `.calls`, `.commands(cmd)`, `.trashed`, `fake_id(rel)`; `motorhof:X` → `base/X`; отдаёт ID и Hashes.sha256.

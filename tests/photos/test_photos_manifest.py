@@ -156,3 +156,23 @@ def test_mtime_compared_with_taken_in_local_time(vienna_tz):
     as_aware = Source("A.JPG", "a", mtime=datetime(2026, 9, 4, 10, 30, 0, tzinfo=timezone.utc))
     plan = m.plan([as_float, as_aware, shot], [LISTING], set())
     assert [i.source.name for i in plan.to_render] == ["SHOT.HEIC", "A.JPG", "F.JPG"]
+
+
+def test_execute_known_and_new_fail_keeps_known_output():
+    from modules.photos.convert import ConvertError
+    m = Manifest.load(None, mh="MH_1")
+    a = src("A.HEIC", "a", day=1)
+    _, outs = run(m, [a])
+    b = src("B.HEIC", "b", day=2)
+
+    def render(item):
+        raise ConvertError("файл повреждён или не читается")
+
+    lower = Variant("listing", 2000, 85, 0, "")  # сменились параметры → A пересчитывается
+    ex = m.execute([a, b], [lower], outs, render)
+    assert ex.done == []
+    assert ("A.HEIC", "файл повреждён или не читается") in ex.errors
+    assert ("B.HEIC", "файл повреждён или не читается") in ex.errors
+    files = m.to_dict()["files"]
+    assert [(f["src"], f["out"], f["orphan"]) for f in files] == [("A.HEIC", "MH_1_01.jpg", False)]
+    assert ex.plan.orphans == []
