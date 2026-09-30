@@ -109,21 +109,32 @@ def compose_environment() -> dict[str, str]:
     return {k: str(v) for k, v in env.items()}
 
 
-def test_compose_points_rclone_to_mounted_config_and_has_no_secrets():
+def test_compose_has_no_secrets():
     env = compose_environment()
-    assert env["RCLONE_CONFIG"] == RCLONE_CONF
     assert not set(env) & set(SECRETS), "секреты только в .env"
     text = read("docker-compose.yml")
     assert not re.search(r"\d{6,}:[A-Za-z0-9_-]{30,}", text), "похоже на токен бота"
 
 
+def test_rclone_config_defined_once_and_points_to_mounted_dir():
+    # одно место правды: иначе при правке одного из двух они молча разъедутся
+    places = {
+        "Dockerfile": dockerfile_env().get("RCLONE_CONFIG"),
+        "docker-compose.yml": compose_environment().get("RCLONE_CONFIG"),
+    }
+    defined = {k: v for k, v in places.items() if v is not None}
+    assert len(defined) == 1, f"RCLONE_CONFIG задан в {sorted(defined) or 'нигде'}, нужно ровно одно место"
+    value = next(iter(defined.values()))
+    assert value == RCLONE_CONF
+    assert volumes()[str(Path(value).parent)] == "./rclone"
+
+
 def test_data_paths_live_on_data_volume():
+    # .env.example попадает в .env как есть — его пути и должны лежать на volume ./data
+    assert volumes()[DATA_MOUNT] == "./data"
     env = env_example()
     for name in ("TMP_DIR", "DB_PATH"):
         assert Path(env[name]).is_relative_to(DATA_MOUNT), f"{name} должен лежать в ./data"
-    settings = load_settings({})
-    assert settings.tmp_dir.is_relative_to(DATA_MOUNT)
-    assert settings.db_path.is_relative_to(DATA_MOUNT)
 
 
 # --- Dockerfile ---
