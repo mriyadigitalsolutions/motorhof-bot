@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 
 import pytest
-from PIL import Image, ImageCms
+from PIL import Image, ImageCms, ImageStat
 
 from modules.photos.convert import ConvertError, Variant, load_variants, read_meta, to_jpeg
 from tests.photos.conftest import (DNG_FIXTURE, HEIC_FIXTURE, jpeg_bytes_truncated, make_jpeg,
@@ -133,6 +133,66 @@ def test_dng_fixture(tmp_path):
     assert exif.get_ifd(EXIF_IFD).get(0x9003) == "2026:09:03 12:53:04"
     assert 0x927C not in exif.get_ifd(EXIF_IFD)
     assert read_meta(DNG_FIXTURE).taken == datetime(2026, 9, 3, 12, 53, 4)
+
+
+def mean_brightness(path: Path) -> float:
+    with Image.open(path) as im:
+        return ImageStat.Stat(im.convert("L")).mean[0]
+
+
+# Средняя яркость (L) снимка, который iPhone вшил в IMG_4561.DNG (так его показывает Drive);
+# замерено отдельно по извлечённому JPEG. Прежний выход (rawpy без автояркости) — 19.9.
+EMBEDDED_BRIGHTNESS = 122.2
+
+
+@needs_dng
+def test_dng_brightness_matches_embedded_iphone_jpeg(tmp_path):
+    dst = tmp_path / "MH_1022_02.jpg"
+    to_jpeg(DNG_FIXTURE, LISTING, dst)
+    got = mean_brightness(dst)
+    assert got >= 80
+    assert abs(got - EMBEDDED_BRIGHTNESS) <= 0.15 * EMBEDDED_BRIGHTNESS
+
+
+@needs_dng
+@pytest.mark.parametrize("thumb", ["missing", "bitmap", "small", "broken"])
+def test_dng_without_usable_preview_falls_back_to_rawpy_auto_bright(tmp_path, monkeypatch, thumb):
+    import rawpy
+
+    small = io.BytesIO()
+    Image.new("RGB", (1008, 756), (128, 128, 128)).save(small, "JPEG")
+    fakes = {"bitmap": (rawpy.ThumbFormat.BITMAP, b""), "small": (rawpy.ThumbFormat.JPEG, small.getvalue()),
+             "broken": (rawpy.ThumbFormat.JPEG, b"\xff\xd8\xff\xe0 not a jpeg")}
+
+    class NoPreview:
+        """Настоящий DNG, у которого подменено только вшитое превью."""
+
+        def __init__(self, raw):
+            self._raw = raw
+
+        def __getattr__(self, name):
+            return getattr(self._raw, name)
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            self._raw.close()
+
+        def extract_thumb(self):
+            if thumb == "missing":
+                raise rawpy.LibRawNoThumbnailError()
+            fmt, data = fakes[thumb]
+            return rawpy._rawpy.Thumbnail(fmt, data)
+
+    real_imread = rawpy.imread
+    monkeypatch.setattr(rawpy, "imread", lambda path: NoPreview(real_imread(path)))
+    dst = tmp_path / "MH_1022_02.jpg"
+    to_jpeg(DNG_FIXTURE, LISTING, dst)
+    with Image.open(dst) as out:
+        assert out.size == (2000, 1500)
+        assert out.getexif().get(0x0110) == "iPhone 13 Pro Max"
+    assert mean_brightness(dst) >= 60
 
 
 @pytest.mark.parametrize("kind", ["empty", "truncated_jpg", "truncated_heic", "truncated_dng"])

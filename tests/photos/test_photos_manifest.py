@@ -165,3 +165,24 @@ def test_execute_known_and_new_fail_keeps_known_output():
     files = m.to_dict()["files"]
     assert [(f["src"], f["out"], f["orphan"]) for f in files] == [("A.HEIC", "MH_1_01.jpg", False)]
     assert ex.plan.orphans == []
+
+
+def test_dng_made_before_embedded_preview_rerendered_heic_kept(tmp_path):
+    """JPEG из DNG, сделанные прежним способом (rawpy без автояркости), пересоздаются под теми же
+    именами; у HEIC отпечаток прежний — не трогаются. 756bc78218722f8f — отпечаток listing
+    (2000/92/0), записанный в манифесты на Drive до перехода на вшитый снимок iPhone."""
+    old = "756bc78218722f8f"
+    path = tmp_path / "_manifest.json"
+    path.write_text(json.dumps({"version": 1, "mh": "MH_1022", "updated": "2026-09-30T10:00:00Z", "files": [
+        {"out": "MH_1022_01.jpg", "src": "A.DNG", "sha256": "a", "taken": None, "variant": "listing",
+         "orphan": False, "nn": 1, "params": old, "src_deleted": False},
+        {"out": "MH_1022_02.jpg", "src": "B.HEIC", "sha256": "b", "taken": None, "variant": "listing",
+         "orphan": False, "nn": 2, "params": old, "src_deleted": False},
+    ]}))
+    m = Manifest.load(path, mh="MH_1022")
+    sources = [src("A.DNG", "a", day=1), src("B.HEIC", "b", day=2)]
+    outs = {"MH_1022_01.jpg", "MH_1022_02.jpg"}
+    plan = m.plan(sources, [LISTING], outs)
+    assert [(i.source.name, i.out_name) for i in plan.to_render] == [("A.DNG", "MH_1022_01.jpg")]
+    m.apply(plan.to_render)
+    assert m.plan(sources, [LISTING], outs).to_render == []

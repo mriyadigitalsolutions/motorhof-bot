@@ -26,6 +26,10 @@ RAW_SUFFIXES = {".dng"}
 HEIC_SUFFIXES = {".heic"}
 SOURCE_SUFFIXES = RAW_SUFFIXES | HEIC_SUFFIXES | {".jpg", ".jpeg"}
 
+# Способ конвертации DNG (входит в отпечаток варианта). Сменился способ — сменить строку.
+# embedded-jpeg-1: вшитый iPhone JPEG, запасной путь — rawpy с автояркостью (история 12, D02).
+DNG_METHOD = "embedded-jpeg-1"
+
 _SRGB = ImageCms.createProfile("sRGB")
 _SRGB_BYTES = ImageCms.ImageCmsProfile(_SRGB).tobytes()
 
@@ -46,9 +50,15 @@ class Variant:
     suffix: str = ""
     on_demand: bool = False
 
-    def fingerprint(self) -> str:
-        """Отпечаток параметров, влияющих на пиксели; хранится в манифесте."""
+    def fingerprint(self, src_name: str | None = None) -> str:
+        """Отпечаток параметров, влияющих на пиксели; хранится в манифесте.
+
+        Для DNG в отпечаток входит способ конвертации (DNG_METHOD): его смена пересоздаёт
+        выходы из DNG под теми же именами, а у HEIC/JPG отпечаток остаётся прежним.
+        """
         params = {k: v for k, v in asdict(self).items() if k not in ("name", "suffix", "on_demand")}
+        if src_name is not None and Path(src_name).suffix.lower() in RAW_SUFFIXES:
+            params["dng"] = DNG_METHOD
         raw = json.dumps(params, sort_keys=True).encode()
         return hashlib.sha256(raw).hexdigest()[:16]
 
@@ -148,18 +158,67 @@ def _check_isobmff(src: Path) -> None:
             pos += box
 
 
+# EXIF Orientation → преобразование (та же таблица, что в ImageOps.exif_transpose).
+_ORIENTATION = {
+    2: Image.Transpose.FLIP_LEFT_RIGHT, 3: Image.Transpose.ROTATE_180,
+    4: Image.Transpose.FLIP_TOP_BOTTOM, 5: Image.Transpose.TRANSPOSE,
+    6: Image.Transpose.ROTATE_270, 7: Image.Transpose.TRANSVERSE, 8: Image.Transpose.ROTATE_90,
+}
+
+
+def _embedded_jpeg(raw, orientation: int | None) -> Image.Image | None:
+    """Полноразмерный JPEG, вшитый iPhone в DNG, или None (нет, не JPEG, меньше кадра, битый).
+
+    Пиксели вшитого снимка лежат так же, как кадр RAW; поворот — по Orientation самого DNG
+    (EXIF, который LibRaw приклеивает к превью, не используется).
+    """
+    import rawpy
+
+    try:
+        thumb = raw.extract_thumb()
+    except Exception:  # noqa: BLE001 — нет превью или LibRaw его не понял: запасной путь
+        return None
+    if thumb.format != rawpy.ThumbFormat.JPEG:
+        return None
+    sizes = raw.sizes
+    try:
+        with Image.open(io.BytesIO(thumb.data)) as im:
+            if max(im.size) < max(sizes.width, sizes.height):
+                return None
+            im.load()
+            icc = im.info.get("icc_profile")
+            img = im.convert("RGB") if im.mode != "RGB" else im.copy()
+    except Exception:  # noqa: BLE001 — битое превью: запасной путь
+        return None
+    if orientation in _ORIENTATION:
+        img = img.transpose(_ORIENTATION[orientation])
+    if icc:
+        img.info["icc_profile"] = icc
+    return img
+
+
+def _decode_dng(src: Path) -> tuple[Image.Image, Image.Exif | None]:
+    """DNG: вшитый снимок iPhone (как JPG), иначе rawpy с автояркостью (история 12, D02)."""
+    import rawpy
+
+    with Image.open(src) as tiff:  # EXIF из TIFF-структуры DNG
+        ex = _load_exif(tiff)
+    with rawpy.imread(str(src)) as raw:
+        # Целостность файла: обрезанный DNG (данные RAW не дочитываются) — нечитаемый,
+        # даже если превью в его начале цело.
+        raw.raw_image  # noqa: B018 — чтение данных RAW, ошибка LibRaw → ConvertError выше
+        img = _embedded_jpeg(raw, ex.get(exif_mod.ORIENTATION) if ex is not None else None)
+        if img is not None:
+            return _to_srgb(img), ex
+        rgb = raw.postprocess(use_camera_wb=True, no_auto_bright=False, output_bps=8,
+                              output_color=rawpy.ColorSpace.sRGB)
+    return Image.fromarray(rgb), ex  # rawpy уже повернул кадр по флагу DNG
+
+
 def _decode(src: Path) -> tuple[Image.Image, Image.Exif | None]:
     """Декодирует исходник в RGB sRGB с физически применённой ориентацией."""
     if src.suffix.lower() in RAW_SUFFIXES:
-        import rawpy
-
-        with rawpy.imread(str(src)) as raw:
-            rgb = raw.postprocess(use_camera_wb=True, no_auto_bright=True, output_bps=8,
-                                  output_color=rawpy.ColorSpace.sRGB)
-        img = Image.fromarray(rgb)  # rawpy уже повернул кадр по флагу DNG
-        with Image.open(src) as tiff:  # EXIF из TIFF-структуры DNG
-            ex = _load_exif(tiff)
-        return img, ex
+        return _decode_dng(src)
     if src.suffix.lower() in HEIC_SUFFIXES:
         _check_isobmff(src)
     with Image.open(src) as im:

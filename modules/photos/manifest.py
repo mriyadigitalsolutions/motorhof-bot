@@ -172,7 +172,7 @@ class Manifest:
                 entry = self._entry(s.sha256, v.name)
                 name = entry["out"] if entry else out_name(self.mh, nn, v.suffix)
                 item = RenderItem(s, v, name, nn)
-                fresh = (entry is not None and entry.get("params") == v.fingerprint()
+                fresh = (entry is not None and entry.get("params") == v.fingerprint(s.name)
                          and name in existing_outputs)
                 (result.skipped if fresh else result.to_render).append(item)
         return result
@@ -189,7 +189,7 @@ class Manifest:
                 "src": s.name,
                 "taken": s.taken.isoformat() if s.taken else None,
                 "orphan": False,
-                "params": v.fingerprint(),
+                "params": v.fingerprint(s.name),
                 "src_deleted": entry.get("src_deleted", False),
             })
         self.updated = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
