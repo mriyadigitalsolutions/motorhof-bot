@@ -58,3 +58,20 @@ def test_all_top_folders_missing_is_drive_error(tmp_path):
     (tmp_path / "диск" / ROOT).mkdir(parents=True)
     with pytest.raises(DriveError):
         Drive(str(tmp_path / "диск"), ROOT).find_car("MH_1022")
+
+
+def test_real_rclone_batches_with_cyrillic_and_spaces(tmp_path):
+    """rclone 1.71.1: `copy --files-from-raw` молча пропускает отсутствующее (код 0) — pull_many
+    узнаёт об этом по диску; push_many кладёт пачку в «На выгрузку»."""
+    base = tmp_path / "диск"
+    names = ["Снимок 1.HEIC", "IMG 2.DNG", "#3.jpg"]
+    make_car(base, "MH_AUTO_НАЛИЧИЕ", "2026", "MH_1022_Мазда 2", {n: n.encode() for n in names + ["лишний.jpg"]})
+    drive = Drive(str(base), ROOT)
+    car = drive.find_car("MH_1022")
+    work = tmp_path / "работа" / "в ход"
+    assert drive.pull_many(drive.source_dir(car), names + ["нет.DNG"], work) == ["нет.DNG"]
+    assert sorted(p.name for p in work.iterdir()) == sorted(names)
+    drive.push_many(work, names[:2], drive.output_dir(car))
+    out = base / ROOT / drive.output_dir(car)
+    assert sorted(p.name for p in out.iterdir()) == sorted(names[:2])
+    assert (out / "Снимок 1.HEIC").read_bytes() == "Снимок 1.HEIC".encode()

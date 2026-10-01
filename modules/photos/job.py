@@ -1,8 +1,10 @@
 """Полный цикл одной машины: Drive → JPEG → Drive → отчёт.
 
 Порядок (PLAN §4): найти машину → проверить `Фотографии/` → список исходников с хэшами Drive →
-манифест → план → проверка места в tmp → скачать только нужное → конвертировать и залить JPEG →
-последним `_manifest.json` → отчёт. Папка задачи в `workdir` удаляется всегда.
+манифест → план → проверка места в tmp → скачать только нужное (одной пачкой `Drive.pull_many`) →
+конвертировать → залить JPEG одной пачкой (`Drive.push_many`) → последним `_manifest.json` → отчёт.
+Число вызовов rclone на прогон не зависит от числа файлов. Сбой пачки скачивания на части файлов —
+они в «Ошибках»; сбой пачки заливки — в манифест идут только реально легшие (листинг с хэшем). Папка задачи в `workdir` удаляется всегда.
 
 Каждая ошибка, которую должен увидеть партнёр, — `JobError` с готовым текстом `.user_text`
 (по-русски, без трейсбэков). Нет исходников — не ошибка, а `Report(status="empty")`.
@@ -240,13 +242,13 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
             drive.push_many(out_local, names, out_dir)  # все JPEG — одной пачкой
         except DriveError:
             # в манифест — только то, что реально легло (листинг + хэш), остальное как было
-            landed = _keep_uploaded(manifest, before, ex.done, out_local,
-                                    {f.name: f.sha256 for f in drive.list_files(out_dir)})
-            if landed:
-                try:
+            try:
+                landed = _keep_uploaded(manifest, before, ex.done, out_local,
+                                        {f.name: f.sha256 for f in drive.list_files(out_dir)})
+                if landed:
                     push_manifest()
-                except DriveError:
-                    log.warning("%s: манифест после сбоя заливки не залит", code)
+            except DriveError:
+                log.warning("%s: манифест после сбоя заливки не залит", code)
             raise
     push_manifest()
 
