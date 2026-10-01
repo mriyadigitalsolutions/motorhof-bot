@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -20,6 +21,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 Clock = Callable[[], datetime]
+log = logging.getLogger(__name__)
 
 CORE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
@@ -161,8 +163,8 @@ class Database:
         if self.schema_version() >= SCHEMA_VERSION:
             return
         legacy = self._has_table("runs")
-        if legacy:
-            self.backup()
+        copy = self.backup() if legacy else None
+        expected = 0
         try:
             with self.transaction():
                 if legacy:
@@ -180,6 +182,9 @@ class Database:
             raise
         except Exception as e:
             raise MigrationError(f"миграция журнала runs → events: {type(e).__name__}: {e}") from e
+        if legacy:
+            log.warning("журнал runs перенесён в events: %d записей; копия базы до миграции — %s",
+                        expected, copy)
 
     def _copy_legacy_runs(self) -> None:
         self._conn.execute(_COPY_RUNS)

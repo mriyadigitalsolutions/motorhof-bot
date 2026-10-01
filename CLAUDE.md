@@ -27,23 +27,27 @@ Telegram-бот MOTORHOF OG: один процесс (aiogram long polling + о�
 - Один файл: `python -m pytest -q tests/photos_job/test_job.py`
 - Бот без Docker: `python -m bot.main` — переменные должны быть в окружении, `.env` сам не читается (его подставляет только compose через `env_file`).
 - CLI локально, без Drive: `python -m modules.photos --in <папка> --out <папка> --mh MH_1022 [--variant full]`
-- CLI с Drive (тот же `job.run`, что у бота): `docker compose exec photos python -m modules.photos MH_1022 [full]`; выход 0 готово, 1 ошибка задачи, 2 аргументы, 3 манифест повреждён.
+- CLI с Drive (тот же `job.run`, что у бота): `docker compose exec bot python -m modules.photos MH_1022 [full]`; выход 0 готово, 1 ошибка задачи, 2 аргументы, 3 манифест повреждён.
 - Запуск/пересборка: `docker compose up -d --build`; обновление: `git pull && docker compose up -d --build`
-- Логи: `docker compose logs -f photos`; настройка rclone: `mkdir -p rclone && docker compose run --rm --no-deps photos rclone config`
+- Логи: `docker compose logs -f bot`; настройка rclone: `mkdir -p rclone && docker compose run --rm --no-deps bot rclone config`
 - Без файла `.env` не работает ни одна команда `docker compose` (сначала `cp .env.example .env`).
 
 ## Структура
 
 ```
-bot/            main.py (build/protect/notify, точка входа), auth.py (Access, AccessMiddleware), router.py (/start /help /status /last)
-core/           settings.py, log.py (redact), db.py (SQLite: runs, jobs), queue.py (JobQueue, every_day), drive.py (обёртка rclone)
-modules/        __init__.py — ENABLED и register_all
-  photos/       __init__.py (register), handlers.py (/fotos, задача photos.convert), job.py (цикл машины), renumber.py («заново»), store.py, jobs.py,
+bot/            main.py (build/protect/notify, точка входа), auth.py (Access, AccessMiddleware), router.py (/start /menu /help /status /last /cancel, fallback),
+                menu.py (Menu: экраны, parent, callback m:…), dialogs.py (Dialogs: core/dialog поверх aiogram FSM)
+core/           settings.py, log.py (redact), db.py (SQLite: jobs, events, представление runs, миграции), queue.py (JobQueue, every_day), drive.py (обёртка rclone),
+                dialog.py (Step, Dialog, Engine), numbering.py (NumberSource, ManualNumberSource)
+modules/        __init__.py — ENABLED, MENU (порядок и активность кнопок) и register_all
+  drive/        экран «Google Drive»;  crm/  кнопка «CRM», неактивна
+  photos/       __init__.py (register), handlers.py (/fotos, задача photos.convert), menu.py (кнопка в экране drive, диалог), job.py (цикл машины), renumber.py («заново»), store.py, jobs.py,
                 convert.py, exif.py, naming.py, manifest.py, reminders.py + cleanup.py (удаление DNG),
                 variants.yaml, __main__.py (CLI)
   _template/    заготовка модуля (/template, kind _template.echo)
-tests/          по папке на слой: core/ drive/ bot/ photos/ photos_job/ photos_reminders/; fakes/; fixtures/
-Dockerfile, docker-compose.yml (сервис photos), .env.example, PLAN.md (спецификация, главнее всего)
+tests/          по папке на слой: core/ drive/ bot/ photos/ photos_job/ photos_reminders/; fakes/ (telegram.py ChatBot, chat.py Partner); fixtures/
+Dockerfile, docker-compose.yml (сервис bot, контейнер motorhof-bot), .env.example, PLAN.md (спецификация, главнее всего); ТЗ v1.0 (меню, фазы A–F) — TZ.md у заказчика
+docs/adr/       решения; 0008 — реестр меню
 ```
 
 ## Ключевые файлы
@@ -61,10 +65,13 @@ Dockerfile, docker-compose.yml (сервис photos), .env.example, PLAN.md (с�
 - `/fotos MH_1022 [full]` → `handlers.parse_request` → `queue.enqueue("photos", "photos.convert", {"key": code, "variants": [...]}, ...)`; дубль по `payload["key"]` не ставится, переполнение → `QueueFull`.
 - Воркер берёт одну задачу; синхронный handler идёт в `to_thread`; возвращённая строка → `notify(job, text)` в `job.chat_id`.
 - `job.run`: `find_car` → список `Фотографии/` → (нет sha256 от Drive — скачать и хэшировать) → проверка места (`SPACE_RESERVE=1.2`) → `Manifest.execute` → каждый JPEG заливается сразу → `_manifest.json` последним и только если изменился → `Report.text()` со ссылкой.
-- Журнал `runs` пишет модуль (в обработчике задачи, связь `photos_job_runs`), не очередь; `error_text` через `core.log.redact`.
+- Журнал — таблица `events(id, ts, actor_id, module, action, object_type, object_id, payload_json, status, error)`: `db.log_event`/`finish_event`/`last_events`; `/last` читает её. `runs` — представление над `events` (`photos`/`convert`) для старого API `record_run_*`/`last_runs`; запуски фото пишет модуль (связь `photos_job_runs`), не очередь; ошибки через `core.log.redact`.
+- Миграции схемы — `PRAGMA user_version` в `Database._migrate`: перед ней копия `<db>.bak-<дата>`, всё в одной транзакции, при сбое `MigrationError` и бот не стартует.
+- Меню: `/start`, `/menu` → `bot.menu.show`; модуль объявляет экраны и кнопки в `register` через `menu.section`/`menu.action(parent=…)`; `modules.MENU` задаёт order/enabled; `Menu.validate()` после регистрации. callback_data `m:<модуль>:<действие>:<арг>` ≤ 64 байт (`m:menu:open:<экран>`, `m:dlg:…`); «Назад» — к `parent`.
+- Диалоги: `core.dialog.Engine` (чистая логика, сессия-словарь, таймаут 10 минут) + `bot.dialogs.Dialogs` (FSM, `MemoryStorage`, `FSMStrategy.USER_IN_CHAT` = chat_id + user_id); после «Выполнить» — `Dialog.finish(values, ctx)` → текст партнёру. `/cancel` сбрасывает FSM, очередь не трогает.
 - Прерванная рестартом задача: `recover_interrupted` при `start` → `on_interrupted` → `runs` = `interrupted`.
 - Ночная проверка: `queue.every_day(DAILY_CHECK_TIME, Reminders.check)` — через `DNG_REMINDER_DAYS` после первой конвертации или при переезде машины в `…_ПРОДАНО` спрашивает партнёра про DNG (кнопки `ph:del|keep|ok|no:<id>`), удаление подтверждает админ, выполняет задача `photos.delete_dng` (в корзину Drive, `src_deleted` в манифесте); без ответа админа 7 дней → `expired`.
-- Контракт модуля: `register(router, queue, **kwargs)`; бот передаёт `settings=`; модуль регистрирует команды на aiogram `Router` и kind вида `"<модуль>.<действие>"`; модули не импортируют друг друга.
+- Контракт модуля: `register(router, queue, *, menu=None, **kwargs)`; бот передаёт `settings=` и `menu=` (меню модуля, `ModuleMenu`); модуль регистрирует команды на aiogram `Router` и kind вида `"<модуль>.<действие>"`; модули не импортируют друг друга.
 - `_manifest.json`: `{"version":1,"mh","updated","files":[{"out","src","sha256","taken","variant","orphan","nn","params","src_deleted"}]}`; смена параметров варианта → пересчёт под теми же именами.
 - Границы Drive: писать только в `<машина>/Фотографии/На выгрузку/`, удалять только `*.dng` прямо в `<машина>/Фотографии/`; остальное — `PermissionError` до вызова rclone.
 - Пути Drive — строки от корня `DRIVE_ROOT`: `<MH|KO>_AUTO_<НАЛИЧИЕ|ПРОДАНО>/<год>/<машина>/...`; код не формата `(MH|KO)_<цифры>` → `ValueError` до rclone.
@@ -98,6 +105,7 @@ Dockerfile, docker-compose.yml (сервис photos), .env.example, PLAN.md (с�
 - Очередь и БД — на временной SQLite.
 - Фикстуры `tests/fixtures/IMG_4079.HEIC`, `tests/fixtures/IMG_4561.DNG` в git нет → тесты с ними `skipif` (`tests/photos/conftest.py`, `tests/photos_job/conftest.py`).
 - Без rclone в `PATH` пропускаются `tests/drive/test_drive_rclone.py` и часть `tests/photos_job/test_job_cli.py`; без демона Docker — сборочный тест в `tests/test_packaging.py`.
+- Меню и диалоги сквозь диспетчер: `tests/fakes/chat.Partner(app, ChatBot(), uid, chat_id)` → `.say(text)`, `.press(data)`; `screens(bot)`, `alerts(bot)`.
 - Очередь в тестах — только публичные методы (`set_notify`, `start`, `run_next`); внутренности (`_notify`, `_claim`, прямой SQL в `jobs`) не трогать.
 
 ## Подводные камни
@@ -112,9 +120,11 @@ Dockerfile, docker-compose.yml (сервис photos), .env.example, PLAN.md (с�
 - Порядок снимков (`naming.sort_key`) сравнивает время в наивном местном времени процесса: TZ процесса меняет нумерацию.
 - Рендер только через `Manifest.execute(..., render)`: он исключает упавший исходник и пересчитывает план без дыр в номерах; голую пару `plan`/`apply` не использовать.
 - Обработчик задачи завершает её «тихо» (failed без общего «задача упала») через `raise core.queue.JobFailedQuietly(text=None)`; так работает сбой удаления DNG (`DeleteFailed`). Сообщения админу о прерванном удалении ждут `set_sender` (ставится в `router.startup`).
+- Нераспознанное сообщение вне диалога: в личке → главное меню, в группе — молчание (бот видит всю переписку при выключенном privacy).
 - Бот работает в личке и в группах (`bot.auth.CHAT_TYPES`); доступ — по `from_user.id` из партнёров, не по чату; ответы и вопросы про DNG идут в `chat_id` команды (группа = отрицательный ID, `reminders.is_group`); в группе подтверждение админа — в тот же чат. Отказ чужому логируется WARNING только для команд и кнопок.
 - Вопрос про DNG считается заданным только после успешной отправки.
 - Ноль JPEG и манифеста не было → `На выгрузку` не создаётся; пустая `Фотографии` → `Report(status="empty")`, не исключение.
+- Сервис compose — `bot` (до фазы A был `photos`): при переходе `docker compose down` до `git pull`, затем `up -d --build --remove-orphans`, иначе два бота с одним токеном (README, «Обновление до версии с меню»).
 - `.dockerignore` исключает `tests/fixtures`, `.autopilot`, `rclone/`, `data/`, все `.env*` кроме `.env.example`.
 - Образ скачивает rclone для `linux-amd64`: на ARM-сервере не запустится.
 
