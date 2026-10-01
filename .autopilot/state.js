@@ -1,7 +1,7 @@
 window.STATE =
 {
   "slug": "motorhof-bot-photos",
-  "dir": "2026-09-30-motorhof-bot-photos",
+  "dir": "2026-09-30-motorhof-bot-photos--wip",
   "title": "MOTORHOF: Telegram-бот, модуль photos",
   "mode": "interview",
   "depth": "deep",
@@ -11,8 +11,8 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-10-01T07:37:30+00:00",
-  "finishedAt": "2026-10-01T07:37:30+00:00",
+  "updatedAt": "2026-10-01T08:16:52+00:00",
+  "finishedAt": null,
   "stages": [
     {
       "id": "preflight",
@@ -47,30 +47,26 @@ window.STATE =
     },
     {
       "id": "build",
-      "status": "done",
+      "status": "active",
       "startedAt": "2026-09-30T21:12:54+00:00",
-      "note": "дополнение: таск 09 («заново»)",
-      "finishedAt": "2026-10-01T07:37:30+00:00"
+      "note": "дополнение: таск 10 (группы)"
     },
     {
       "id": "review",
-      "status": "done",
+      "status": "active",
       "startedAt": "2026-09-30T21:21:04+00:00",
-      "note": "дополнение: таск 09 («заново»)",
-      "finishedAt": "2026-10-01T07:37:30+00:00"
+      "note": "дополнение: таск 10 (группы)"
     },
     {
       "id": "final",
-      "status": "done",
-      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)",
-      "startedAt": "2026-10-01T07:37:30+00:00",
-      "finishedAt": "2026-10-01T07:37:30+00:00"
+      "status": "pending",
+      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)"
     }
   ],
   "requirements": {
-    "total": 56,
+    "total": 57,
     "done": 56,
-    "inTicket": 0,
+    "inTicket": 1,
     "inSpec": 0,
     "placeholder": 0,
     "deferred": 0,
@@ -447,6 +443,28 @@ window.STATE =
         "passed": 290,
         "failed": 0
       }
+    },
+    {
+      "id": "10",
+      "title": "Бот в группах: команды от партнёров, ответы в группу",
+      "requirements": [
+        "G06",
+        "R13.1"
+      ],
+      "blockedBy": [
+        "09"
+      ],
+      "wave": 8,
+      "zone": [
+        "bot/",
+        "modules/photos/",
+        "tests/"
+      ],
+      "status": "in-progress",
+      "startedAt": "2026-10-01T08:16:52+00:00",
+      "retries": 0,
+      "repairs": 0,
+      "handoffs": 0
     }
   ],
   "singlePass": null,
