@@ -1,8 +1,10 @@
 """Кто есть кто: партнёры (ALLOWED_TELEGRAM_IDS) и админы (партнёры из ADMIN_TELEGRAM_IDS).
 
 AccessMiddleware ставится outer-middleware на dp.update (bot.main.protect) — до любого наблюдателя,
-для всех типов апдейтов: чужой отправитель или не личный чат — апдейт поглощается без ответа,
-в лог строка с ID и командой (без текста).
+для всех типов апдейтов. Пропускается апдейт из личного чата, группы или супергруппы, если
+отправитель (from_user) — партнёр; чужой отправитель, апдейт без отправителя (канал, анонимный
+админ группы) или без чата (inline) — поглощается без ответа, в лог строка с ID и командой
+(без текста).
 """
 from __future__ import annotations
 
@@ -15,6 +17,8 @@ from aiogram.types import CallbackQuery, Message, TelegramObject, Update
 from core.settings import Settings
 
 log = logging.getLogger(__name__)
+
+CHAT_TYPES = frozenset({"private", "group", "supergroup"})
 
 
 class Access:
@@ -71,8 +75,8 @@ class AccessMiddleware(BaseMiddleware):
     async def __call__(self, handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
                        event: TelegramObject, data: dict[str, Any]) -> Any:
         uid, chat_type, command = _describe(event)
-        if chat_type != "private":
-            log.warning("отказ: не личный чат (%s), id=%s, команда=%s", chat_type, uid, command)
+        if chat_type not in CHAT_TYPES:
+            log.warning("отказ: чат %s не принимается, id=%s, команда=%s", chat_type, uid, command)
             return None
         if not self.access.is_partner(uid):
             log.warning("отказ: чужой id=%s, команда=%s", uid, command)

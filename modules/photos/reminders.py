@@ -158,6 +158,18 @@ class DeleteFailed(JobFailedQuietly):
         return self.code
 
 
+def is_group(chat_id: int | None) -> bool:
+    """Группа или супергруппа: у Telegram их ID отрицательные, у личного чата = ID человека."""
+    return chat_id is not None and chat_id < 0
+
+
+def _chats(req: DngRequest) -> list[int]:
+    """Куда писать об удалении: в группе — только в неё (админ нажимал там же);
+    в личке — партнёру и админу, каждому в его личный чат."""
+    ids = [req.chat_id] if is_group(req.chat_id) else [req.chat_id, req.admin_id]
+    return [c for c in dict.fromkeys(ids) if c is not None]
+
+
 def parse_data(data: str | None) -> tuple[str, int] | None:
     """`ph:del:17` → ("del", 17); чужое или битое → None."""
     parts = (data or "").split(":")
@@ -427,7 +439,9 @@ class Reminders:
             return
         self._set_request(req.id, **pending)
         self._update_car(req.code, state="pending_admin")
-        for admin in admins:  # личный чат админа = его ID
+        # в группе — один вопрос в неё же (видно всем, нажать может только админ);
+        # в личке — каждому админу в его личный чат (ID чата = ID админа)
+        for admin in ([chat_id] if is_group(chat_id) else admins):
             await self._send(admin, admin_text(req.code, req.dng_count, req.dng_bytes, user_name),
                              [("Подтвердить", f"{PREFIX}:ok:{req.id}"), ("Отменить", f"{PREFIX}:no:{req.id}")])
         await self._send(chat_id, TEXT_SENT_TO_ADMIN)
@@ -471,7 +485,7 @@ class Reminders:
         if req is None or req.status != "confirmed":
             log.warning("задача %s: запрос на удаление DNG не подтверждён или уже выполнен", job.id)
             return None
-        chats = [c for c in dict.fromkeys([req.chat_id, req.admin_id]) if c is not None]
+        chats = _chats(req)
 
         async def tell(text: str) -> None:
             for c in chats:
@@ -524,7 +538,7 @@ class Reminders:
         if car is not None and car["pending_request_id"] == req.id:
             self._update_car(req.code, state="idle", pending_request_id=None, reminded=0,
                              next_ask_at=self._now().isoformat())
-        for chat_id in dict.fromkeys([req.chat_id, req.admin_id]):
+        for chat_id in _chats(req):
             if chat_id != job.chat_id:
                 self._send_later(chat_id, text)
         return text

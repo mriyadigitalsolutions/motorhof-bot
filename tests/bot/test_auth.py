@@ -1,4 +1,5 @@
-"""Доступ: чужие и группы — молчание и строка в лог; админ только из партнёров."""
+"""Доступ: партнёр — в личке и в группе; чужие и без отправителя — молчание и строка в лог;
+админ только из партнёров."""
 import logging
 from datetime import datetime
 
@@ -61,17 +62,32 @@ async def test_partner_passes():
     mw = AccessMiddleware(Access(settings()))
     assert await mw(h, message(2), {}) == "ok"
     assert await mw(h, callback(1), {}) == "ok"
-    assert h.calls == 2
+    assert await mw(h, message(2, "/status", chat_type="group"), {}) == "ok"
+    assert await mw(h, message(2, "/last@motorhof_bot", chat_type="supergroup"), {}) == "ok"
+    assert h.calls == 4
+
+
+async def test_group_message_without_sender_silent(caplog):
+    """Анонимный админ группы / пост от имени чата: from_user нет — молчание."""
+    h = Handler()
+    mw = AccessMiddleware(Access(settings()))
+    event = Message(message_id=1, date=datetime(2026, 9, 30), text="/fotos MH_1022 секрет",
+                    chat=Chat(id=-100, type="supergroup"),
+                    sender_chat=Chat(id=-100, type="supergroup"))
+    with caplog.at_level(logging.INFO):
+        assert await mw(h, event, {}) is None
+    assert h.calls == 0
+    assert "/fotos" in caplog.text and "секрет" not in caplog.text
 
 
 @pytest.mark.parametrize("event,command", [
     (message(42, "/fotos MH_1022 секрет"), "/fotos"),
     (message(42, "привет, секрет"), "текст"),
     (callback(42, "dng:секрет"), "кнопка"),
-    (message(2, "/status", chat_type="group"), "/status"),
-    (message(2, "/last@motorhof_bot", chat_type="supergroup"), "/last"),
+    (message(42, "/status", chat_type="group"), "/status"),
+    (message(42, "/last@motorhof_bot", chat_type="supergroup"), "/last"),
 ])
-async def test_stranger_or_group_silent_and_logged(event, command, caplog):
+async def test_stranger_silent_and_logged(event, command, caplog):
     h = Handler()
     mw = AccessMiddleware(Access(settings()))
     with caplog.at_level(logging.INFO):
