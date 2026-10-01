@@ -82,6 +82,7 @@ def build(settings: Settings) -> App:
     dp = Dispatcher(storage=MemoryStorage(), fsm_strategy=FSMStrategy.USER_IN_CHAT)
     dp["access"] = access  # хендлеры получают его аргументом access (права админа)
     dp["settings"] = settings
+    dp["dialogs"] = dialogs  # команды модулей, открывающие диалог (/neu), получают его аргументом
     protect(dp, access)
     dp.include_routers(make_router(queue, db, settings.tz, module_help, menu, dialogs),
                        dialogs.router(), menu_mod.make_router(menu, dialogs), modules_router,

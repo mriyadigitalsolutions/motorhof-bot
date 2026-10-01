@@ -7,7 +7,10 @@
 
 Писать можно только в `<машина>/<SOURCE_SUBDIR>/<OUTPUT_SUBDIR>/`, переименовывать — только файл
 прямо в этой папке в другое имя в ней же, удалять — только DNG прямо в `<машина>/<SOURCE_SUBDIR>/`.
-Остальное — `PermissionError` до вызова rclone.
+Создавать новую машину — только `mkdir_vehicle`: `<PREFIX>_AUTO_НАЛИЧИЕ/<год>/`,
+`<PREFIX>_AUTO_НАЛИЧИЕ/<год>/<PREFIX>_<цифры>_<Марка>_<Модель>/` и её подпапки
+`SOURCE_SUBDIR`, `SUBDIR_DOCS`, `SUBDIR_SALES` (пустыми). Остальное — `PermissionError` до вызова
+rclone. Почему так — docs/adr/0009-drive-write-boundaries.md.
 """
 from __future__ import annotations
 
@@ -34,8 +37,17 @@ TOPS: dict[str, str] = {
     "KO_AUTO_ПРОДАНО": "sold",
 }
 
+# Куда mkdir_vehicle кладёт новую машину: только НАЛИЧИЕ своего префикса.
+STOCK_TOPS: dict[str, str] = {"MH": "MH_AUTO_НАЛИЧИЕ", "KO": "KO_AUTO_НАЛИЧИЕ"}
+
 _CAR_NAME = re.compile(r"^((?:MH|KO)_\d+)_")
 _CODE = re.compile(r"^(?:MH|KO)_\d+$")
+_YEAR = re.compile(r"[0-9]{4}")  # только fullmatch: «2026\n» и «２０２６» не проходят
+# Имя новой папки машины: <PREFIX>_<цифры>_<Марка>_<Модель>; марка без «_», модель — с ним.
+_NEW_CAR_NAME = re.compile(r"(MH|KO)_[0-9]{1,6}_[A-Za-z0-9-]+_[A-Za-z0-9_-]+")  # только fullmatch
+# Номер в имени любой папки машины для проверки занятости: «MH_01042_…» и «MH_1042» без суффикса тоже.
+_ANY_NUMBER = re.compile(r"(MH|KO)_([0-9]+)(?:_.*)?", re.DOTALL)
+VEHICLE_NAME_MAX = 100
 DEFAULT_TIMEOUT = 1800  # секунд на один вызов rclone
 _STDERR_TAIL = 5
 # Пачки (pull_many/push_many): один `rclone copy --files-from-raw` на все файлы, параллельно.
@@ -77,6 +89,17 @@ class DriveError(Exception):
         if self.stderr_tail:
             text += "\n" + "\n".join(self.stderr_tail)
         super().__init__(text)
+
+
+class VehicleMkdirError(DriveError):
+    """mkdir_vehicle упал на середине. `created` — пути (от корня), которые к этому моменту
+    уже созданы этим вызовом, по порядку: вызывающий сообщает их партнёру и пишет в журнал.
+    Пустой список — не создано ничего."""
+
+    def __init__(self, message: str, stderr_tail: list[str] | None = None,
+                 returncode: int | None = None, created: Iterable[str] = ()):
+        super().__init__(message, stderr_tail, returncode)
+        self.created = list(created)
 
 
 class CarNotFound(Exception):
@@ -150,6 +173,8 @@ class Drive:
         runner: Runner = subprocess_runner,
         source_subdir: str = "Фотографии",
         output_subdir: str = "На выгрузку",
+        docs_subdir: str = "Документы",
+        sales_subdir: str = "Verkauf",
         rclone: str = "rclone",
         secrets: Iterable[str] = (),
         timeout: float = DEFAULT_TIMEOUT,
@@ -159,6 +184,8 @@ class Drive:
         self.runner = runner
         self.source_subdir = source_subdir
         self.output_subdir = output_subdir
+        self.docs_subdir = docs_subdir
+        self.sales_subdir = sales_subdir
         self.rclone = rclone
         self.secrets = [s for s in secrets if s]
         self.local = self._is_local(remote)
@@ -172,6 +199,8 @@ class Drive:
             runner=runner,
             source_subdir=settings.source_subdir,
             output_subdir=settings.output_subdir,
+            docs_subdir=settings.subdir_docs,
+            sales_subdir=settings.subdir_sales,
             secrets=settings.secrets(),
             **kw,
         )
@@ -229,9 +258,9 @@ class Drive:
 
     # --- поиск машины ---
 
-    def _scan(self) -> list[CarFolder]:
-        """Все папки машин глубины 2 во всех четырёх корнях."""
-        cars: list[CarFolder] = []
+    def _top_dirs(self):
+        """Папки глубины 2 во всех четырёх корнях: (top, kind, год, имя, ID). Нет ни одного
+        корня → DriveError. Внутрь папок машин не заглядывает."""
         present = 0
         for top, kind in TOPS.items():
             res = self._run("lsjson", self.spec(top), "--dirs-only", "--max-depth", "2")
@@ -243,24 +272,37 @@ class Drive:
                 parts = str(entry.get("Path") or "").split("/")
                 if len(parts) != 2 or not entry.get("IsDir", True):
                     continue
-                m = _CAR_NAME.match(parts[1])
-                if not m:
-                    continue
-                cars.append(
-                    CarFolder(
-                        code=m.group(1),
-                        name=parts[1],
-                        path=f"{top}/{parts[0]}/{parts[1]}",
-                        kind=kind,
-                        year=parts[0],
-                        id=entry.get("ID") or None,
-                    )
-                )
+                yield top, kind, parts[0], parts[1], entry.get("ID") or None
         if present == 0:
             raise DriveError(
                 "Не найдена ни одна из папок наличия/проданных в корне Drive. Проверь DRIVE_ROOT и доступ rclone."
             )
+
+    def _scan(self) -> list[CarFolder]:
+        """Все папки машин глубины 2 во всех четырёх корнях."""
+        cars: list[CarFolder] = []
+        for top, kind, year, name, folder_id in self._top_dirs():
+            m = _CAR_NAME.match(name)
+            if not m:
+                continue
+            cars.append(CarFolder(code=m.group(1), name=name, path=f"{top}/{year}/{name}",
+                                  kind=kind, year=year, id=folder_id))
         return cars
+
+    def number_taken(self, code: str) -> list[str]:
+        """Пути всех папок с тем же номером во всех четырёх корнях и всех годах — по числу, а не
+        по строке: для MH_1042 заняты и «MH_01042_…», и «MH_1042» без марки/модели.
+        [] — номер свободен. Для проверки перед созданием новой машины."""
+        m = re.fullmatch(r"(MH|KO)_([0-9]+)", code or "")
+        if not m:
+            raise ValueError(f"код машины должен быть вида MH_1022 или KO_2001: {code!r}")
+        prefix, number = m.group(1), int(m.group(2))
+        found = []
+        for top, _kind, year, name, _id in self._top_dirs():
+            n = _ANY_NUMBER.fullmatch(name)
+            if n and n.group(1) == prefix and int(n.group(2)) == number:
+                found.append(f"{top}/{year}/{name}")
+        return found
 
     def find_car(self, code: str) -> CarFolder:
         if not _CODE.match(code):
@@ -286,6 +328,11 @@ class Drive:
         return result
 
     # --- пути машины ---
+
+    @property
+    def vehicle_subdirs(self) -> tuple[str, str, str]:
+        """Подпапки новой машины (из настроек): Фотографии, Документы, Verkauf."""
+        return (self.source_subdir, self.docs_subdir, self.sales_subdir)
 
     def source_dir(self, car: CarFolder) -> str:
         return f"{car.path}/{self.source_subdir}"
@@ -461,6 +508,69 @@ class Drive:
         self._check_write(path, file=False)
         self._check(self._run("mkdir", self.spec(path)), "создание папки")
         return self.folder_id(path)
+
+    def _check_vehicle(self, path: str) -> None:
+        """Единственное, что можно создать для новой машины: папка года в НАЛИЧИЕ, папка машины
+        в ней и её подпапки из настроек. Префикс имени машины совпадает с префиксом корня."""
+        parts = _split(path)
+        top_prefix = next((p for p, top in STOCK_TOPS.items() if parts and parts[0] == top), None)
+        ok = top_prefix is not None and 2 <= len(parts) <= 4 and bool(_YEAR.fullmatch(parts[1]))
+        if ok and len(parts) >= 3:
+            m = _NEW_CAR_NAME.fullmatch(parts[2])
+            ok = bool(m) and m.group(1) == top_prefix and len(parts[2]) <= VEHICLE_NAME_MAX
+        if ok and len(parts) == 4:
+            ok = parts[3] in self.vehicle_subdirs
+        if not ok:
+            raise PermissionError(
+                "создавать можно только <MH|KO>_AUTO_НАЛИЧИЕ/<год>/<PREFIX>_<номер>_<Марка>_<Модель> "
+                f"и её подпапки {', '.join(self.vehicle_subdirs)}: {path}")
+
+    def mkdir_vehicle(self, prefix: str, year: int | str, name: str,
+                      subdirs: Iterable[str]) -> list[str]:
+        """Новая папка машины: `<PREFIX>_AUTO_НАЛИЧИЕ/<год>/<name>/` с подпапками subdirs (только
+        из vehicle_subdirs). Папка года создаётся, если её нет; корень НАЛИЧИЕ — никогда.
+
+        Возвращает созданные пути (от корня) по порядку: [год?, машина, подпапки…].
+        Все пути проверяются до первого вызова rclone (вне границ → PermissionError, rclone не
+        зовётся). Папка машины уже есть → FileExistsError, ничего не создаётся. Сбой rclone
+        (или нет корня НАЛИЧИЕ) → VehicleMkdirError с `created` — что уже успело появиться;
+        дальше после сбоя не идём. Содержимое подпапок не читается (листинги — только корня
+        НАЛИЧИЕ и папки года)."""
+        prefix = str(prefix)
+        year = str(year)
+        top = STOCK_TOPS.get(prefix)
+        if top is None:
+            raise PermissionError(f"неизвестный префикс {prefix!r}: только {', '.join(STOCK_TOPS)}")
+        year_path = f"{top}/{year}"
+        car_path = f"{year_path}/{name}"
+        subdirs = list(subdirs)
+        sub_paths = [f"{car_path}/{sub}" for sub in subdirs]
+        for path in (year_path, car_path, *sub_paths):
+            self._check_vehicle(path)
+        if len(set(subdirs)) != len(subdirs):
+            raise PermissionError(f"подпапки повторяются: {subdirs}")
+
+        created: list[str] = []
+        try:
+            if self.find_dir(top) is None:
+                raise DriveError(f"на Drive нет папки {top}: проверь DRIVE_ROOT и доступ rclone.")
+            if self.find_dir(year_path) is None:
+                self._mkdir_vehicle_dir(year_path)
+                created.append(year_path)
+            elif self.find_dir(car_path) is not None:
+                raise FileExistsError(f"папка уже есть: {car_path}")
+            for path in (car_path, *sub_paths):
+                self._mkdir_vehicle_dir(path)
+                created.append(path)
+        except VehicleMkdirError:
+            raise
+        except DriveError as e:
+            raise VehicleMkdirError(e.message, e.stderr_tail, e.returncode, created) from None
+        return created
+
+    def _mkdir_vehicle_dir(self, path: str) -> None:
+        self._check_vehicle(path)
+        self._check(self._run("mkdir", self.spec(path)), "создание папки")
 
     def rename(self, src: str, dst: str) -> None:
         """Переименование файла внутри «На выгрузку» (rclone moveto); цель перезаписывается."""

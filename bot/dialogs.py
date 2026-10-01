@@ -15,6 +15,7 @@ USER_IN_CHAT — пара chat_id + user_id: в группе у каждого �
 """
 from __future__ import annotations
 
+import asyncio
 import inspect
 import logging
 from datetime import datetime, timezone
@@ -70,7 +71,10 @@ class Dialogs:
     async def on_text(self, message: Message, state: FSMContext) -> None:
         text = message.text or ""
         session = (await state.get_data()).get(KEY)
-        out = self.engine.text(session, text, self.clock())
+        # движок синхронный, а validate шага может ходить в Drive (проверка номера — секунды):
+        # в потоке, чтобы не держать event loop. Сессия — копия словаря из FSM, общего
+        # состояния движок не меняет.
+        out = await asyncio.to_thread(self.engine.text, session, text, self.clock())
         await self._apply(out, message, state, message.from_user)
         if (out.kind == "closed" and out.text == EXPIRED and self.menu is not None
                 and self.menu.is_label(text) and normalize_label(text) != normalize_label(BACK_LABEL)):

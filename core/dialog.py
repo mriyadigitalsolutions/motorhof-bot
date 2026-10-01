@@ -7,7 +7,7 @@
 
 Кнопки диалога — нижняя клавиатура Telegram: нажатие приходит обычным текстом с подписью.
 `Engine.text` узнаёт служебные подписи («Назад» — шаг назад, «Отмена», «Выполнить» на экране
-подтверждения) и подписи вариантов текущего шага, остальное — свободный текст через validate.
+подтверждения — или своя подпись диалога, `Dialog.run_label`) и подписи вариантов текущего шага, остальное — свободный текст через validate.
 На кнопках разрешены значки («⬅️ Назад»), сравнение подписей — без них (`normalize_label`):
 подпись старой клавиатуры без значка совпадает с новой. Ряды кнопок раскладывает `layout` —
 одна функция для меню и диалога.
@@ -112,15 +112,21 @@ Finish = Callable[[Values, Context], Union[str, Awaitable[str]]]
 class Dialog:
     """id — латиница/цифры/подчёркивание (уходит в состояние FSM).
     confirm(values) — текст экрана «Что будет сделано»; None — без подтверждения.
-    finish(values, ctx) — действие после «Выполнить»; возвращает ответ партнёру."""
+    finish(values, ctx) — действие после «Выполнить»; возвращает ответ партнёру.
+    run_label — подпись кнопки подтверждения («✅ Создать»); по ней же распознаётся нажатие
+    и строится подсказка «Нажми …». По умолчанию RUN_LABEL («✅ Выполнить»)."""
     id: str
     steps: Sequence[Step]
     finish: Finish
     confirm: Callable[[Values], str] | None = None
+    run_label: str = RUN_LABEL
 
     def __post_init__(self) -> None:
         if not self.steps:
             raise ValueError(f"диалог {self.id}: нет шагов")
+        if normalize_label(self.run_label) in (normalize_label(BACK_LABEL),
+                                               normalize_label(CANCEL_LABEL), ""):
+            raise ValueError(f"диалог {self.id}: подпись подтверждения {self.run_label!r} занята")
         names = [s.name for s in self.steps]
         if len(set(names)) != len(names):
             raise ValueError(f"диалог {self.id}: имена шагов повторяются")
@@ -193,9 +199,10 @@ class Engine:
                 return Outcome("closed", CANCELLED)
             return self._show(d, self._touch(dict(session, step=idx - 1), now))
         if idx >= len(d.steps):  # экран подтверждения ждёт «Выполнить»
-            if label == normalize_label(RUN_LABEL):
+            if label == normalize_label(d.run_label):
                 return Outcome("finish", values=dict(session["values"]), dialog=d.id)
-            return self._show(d, session, note="Нажми «Выполнить» или «Отмена».")
+            return self._show(d, session, note=f"Нажми «{normalize_label(d.run_label)}» "
+                                               f"или «{normalize_label(CANCEL_LABEL)}».")
         step = d.steps[idx]
         for choice in step.options(session["values"]):
             if normalize_label(choice.label) == label:
@@ -236,7 +243,7 @@ class Engine:
         nav = [BACK_LABEL, CANCEL_LABEL]
         if idx >= len(d.steps):
             text = CONFIRM_TITLE + "\n" + d.confirm(values)
-            rows = layout([RUN_LABEL], nav)
+            rows = layout([d.run_label], nav)
         else:
             step = d.steps[idx]
             text = step.text(values)

@@ -22,6 +22,8 @@ class Settings:
     drive_root: str
     source_subdir: str
     output_subdir: str
+    subdir_docs: str
+    subdir_sales: str
     tmp_dir: Path
     db_path: Path
     log_level: str
@@ -89,6 +91,8 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         drive_root=_str(env, "DRIVE_ROOT", "MOTORHOF_AUTO"),
         source_subdir=_str(env, "SOURCE_SUBDIR", "Фотографии"),
         output_subdir=_str(env, "OUTPUT_SUBDIR", "На выгрузку"),
+        subdir_docs=_str(env, "SUBDIR_DOCS", "Документы"),
+        subdir_sales=_str(env, "SUBDIR_SALES", "Verkauf"),
         tmp_dir=Path(_str(env, "TMP_DIR", "/app/data/tmp")),
         db_path=Path(_str(env, "DB_PATH", "/app/data/motorhof.sqlite")),
         log_level=_str(env, "LOG_LEVEL", "INFO").upper(),
