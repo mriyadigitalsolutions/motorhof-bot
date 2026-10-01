@@ -106,6 +106,12 @@ class RemoteFile:
     id: str | None = None
 
 
+@dataclass(frozen=True)
+class RemoteDir:
+    name: str
+    id: str | None = None  # ID Drive; локальная папка и rclone без ID → None
+
+
 def _clean_stderr(stderr: str, secrets: Iterable[str]) -> list[str]:
     """Последние строки stderr без секретов и без путей к конфигу rclone."""
     lines = []
@@ -304,28 +310,32 @@ class Drive:
             )
         return files
 
-    def exists(self, path: str) -> bool:
-        res = self._run("lsjson", self.spec(path), "--stat")
-        if res.returncode != 0 and self._missing(res):
-            return False
-        self._check(res, "проверка пути")
-        return True
-
-    def folder_id(self, path: str) -> str | None:
-        """ID папки из листинга родителя: Drive (общий диск) отдаёт `lsjson --stat` папки без ID
-        и медленно, а в листинге ID есть у каждой записи. Нет папки, родителя или ID → None."""
+    def find_dir(self, path: str) -> RemoteDir | None:
+        """Папка по пути — одним листингом родителя (`--dirs-only --max-depth 1`), без `--stat`:
+        у Drive (общий диск) `lsjson --stat` папки идёт минутами и приходит без ID, а в листинге
+        ID есть у каждой записи. Нет папки или родителя → None."""
         parts = _split(path)
-        if not parts:
-            return None
-        parent, name = "/".join(parts[:-1]), parts[-1]
+        parent = "/".join(parts[:-1])
         res = self._run("lsjson", self.spec(parent), "--dirs-only", "--max-depth", "1")
         if res.returncode != 0 and self._missing(res):
             return None
-        self._check(res, "ID папки")
-        for e in self._json(res, "[]"):
-            if e.get("Name") == name and e.get("IsDir", True):
-                return str(e.get("ID") or "") or None
+        self._check(res, "поиск папки")
+        entries = self._json(res, "[]")
+        if not parts:
+            return RemoteDir("")  # корень: листинг прошёл — значит есть
+        for e in entries:
+            if e.get("Name") == parts[-1] and e.get("IsDir", True):
+                return RemoteDir(parts[-1], str(e.get("ID") or "") or None)
         return None
+
+    def exists(self, path: str) -> bool:
+        """Есть ли папка (только папки: файлы ищутся через list_files)."""
+        return self.find_dir(path) is not None
+
+    def folder_id(self, path: str) -> str | None:
+        """ID папки; нет папки или ID → None."""
+        found = self.find_dir(path)
+        return found.id if found else None
 
     @staticmethod
     def folder_link(folder_id: str | None) -> str | None:

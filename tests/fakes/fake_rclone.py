@@ -2,8 +2,8 @@
 
 Понимает то подмножество rclone, которым пользуется Drive-слой: `lsjson` (`--dirs-only`,
 `--files-only`, `--max-depth`, `--hash`, `--stat`), `copyto`, `moveto`, `mkdir`, `deletefile`.
-Отдаёт `ID` и `Hashes.sha256` как Google Drive; как и настоящий Drive на общем диске,
-`lsjson --stat` папки приходит без `ID` — ID папки есть только в листинге её родителя. Путь `<remote>:<путь>` ведёт в `base/<путь>`,
+Отдаёт `ID` и `Hashes.sha256` как Google Drive; `lsjson --stat` по папке —
+ошибка (на общем диске Drive он медленный и без `ID`): папки ищутся листингом родителя. Путь `<remote>:<путь>` ведёт в `base/<путь>`,
 путь без двоеточия — обычный локальный файл.
 
 Возможности для тестов:
@@ -177,9 +177,11 @@ class FakeRclone:
             return RunResult(3, "[\n", NOTICE + "\nERROR : error listing: directory not found\n")
         want_hash = "--hash" in flags
         if "--stat" in flags:
-            entry = self._entry(target, target, want_hash)
             if target.is_dir():
-                entry.pop("ID")  # как Google Drive (общий диск): --stat папки приходит без ID
+                # на Google Drive (общий диск) --stat папки идёт минутами и приходит без ID —
+                # Drive-слой так делать не должен; фейк падает, чтобы тест это поймал
+                return RunResult(1, "", NOTICE + "\nERROR : fake: lsjson --stat по папке запрещён\n")
+            entry = self._entry(target, target, want_hash)
             return RunResult(0, json.dumps(entry, ensure_ascii=False), NOTICE + "\n")
         depth = int(self._flag(flags, "--max-depth") or 0) or 10**6
         out = []

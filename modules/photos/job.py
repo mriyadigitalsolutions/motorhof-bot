@@ -139,7 +139,8 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
     if not remote:
         return Report(code, status="empty")
 
-    out_exists = drive.exists(out_dir)
+    out_found = drive.find_dir(out_dir)  # заодно ID «На выгрузку» для ссылки
+    out_exists, out_id = out_found is not None, out_found.id if out_found else None
     outputs = {f.name for f in drive.list_files(out_dir)} if out_exists else set()
     manifest = load_manifest(code, drive, out_dir, outputs, tmp)
     if manifest.renumber is not None:
@@ -196,7 +197,6 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
             progress(min(attempts, total), total)
 
     uploaded: list[str] = []
-    out_id: str | None = None  # ID «На выгрузку», если папку создали в этом прогоне (ответ mkdir)
 
     def render(item: RenderItem) -> None:
         nonlocal attempts, out_exists, out_id
@@ -242,7 +242,7 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
         skipped=len([i for i in ex.first_plan.skipped if i.out_name not in rendered]),
         failed=errors,
         orphans=list(ex.plan.orphans),
-        link=Drive.folder_link(out_id or drive.folder_id(out_dir)) if out_exists else None,
+        link=Drive.folder_link(out_id) if out_exists else None,
         status="partial" if errors else "done",
     )
 
