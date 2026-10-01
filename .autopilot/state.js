@@ -1,7 +1,7 @@
 window.STATE =
 {
   "slug": "motorhof-bot-photos",
-  "dir": "2026-09-30-motorhof-bot-photos--wip",
+  "dir": "2026-09-30-motorhof-bot-photos",
   "title": "MOTORHOF: Telegram-бот, модуль photos",
   "mode": "interview",
   "depth": "deep",
@@ -11,8 +11,8 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-10-01T09:26:48+00:00",
-  "finishedAt": null,
+  "updatedAt": "2026-10-01T09:36:28+00:00",
+  "finishedAt": "2026-10-01T09:36:28+00:00",
   "stages": [
     {
       "id": "preflight",
@@ -47,25 +47,29 @@ window.STATE =
     },
     {
       "id": "build",
-      "status": "active",
+      "status": "done",
       "startedAt": "2026-09-30T21:12:54+00:00",
-      "note": "дополнение: таск 12 (ссылка)"
+      "note": "дополнение: таск 12 (ссылка)",
+      "finishedAt": "2026-10-01T09:36:28+00:00"
     },
     {
       "id": "review",
-      "status": "active",
+      "status": "done",
       "startedAt": "2026-09-30T21:21:04+00:00",
-      "note": "дополнение: таск 12 (ссылка)"
+      "note": "дополнение: таск 12 (ссылка)",
+      "finishedAt": "2026-10-01T09:36:28+00:00"
     },
     {
       "id": "final",
-      "status": "pending",
-      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)"
+      "status": "done",
+      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)",
+      "startedAt": "2026-10-01T09:36:28+00:00",
+      "finishedAt": "2026-10-01T09:36:28+00:00"
     }
   ],
   "requirements": {
     "total": 59,
-    "done": 58,
+    "done": 59,
     "inTicket": 0,
     "inSpec": 0,
     "placeholder": 0,
@@ -515,16 +519,22 @@ window.STATE =
         "modules/photos/job.py",
         "tests/"
       ],
-      "status": "in-progress",
+      "status": "done",
       "startedAt": "2026-10-01T09:26:48+00:00",
       "retries": 0,
-      "repairs": 0,
-      "handoffs": 0
+      "repairs": 1,
+      "handoffs": 0,
+      "finishedAt": "2026-10-01T09:36:28+00:00",
+      "commit": "e78a4d5",
+      "tests": {
+        "passed": 319,
+        "failed": 0
+      }
     }
   ],
   "singlePass": null,
   "tests": {
-    "passed": 316,
+    "passed": 319,
     "failed": 0,
     "skipped": 1
   },
@@ -581,7 +591,10 @@ window.STATE =
     "09 · job.py:117 — реэкспорт ошибок из store (noqa F401)",
     "10 · сохранённый chat_id группы может умереть (группа стала супергруппой / бот удалён) — вопрос про DNG молча не уходит до следующего /fotos",
     "11 · поворот вшитого JPEG для Orientation≠1 проверен только синтетически — нет реального вертикального DNG с iPhone",
-    "11 · full-вариант из DNG светлеет только при /fotos … full; выходы с удалённым DNG остаются тёмными"
+    "11 · full-вариант из DNG светлеет только при /fotos … full; выходы с удалённым DNG остаются тёмными",
+    "12 · core/drive.py:199 — ветка _json для словаря (--stat) больше не нужна",
+    "12 · drive.py:326 — IsDir по умолчанию True",
+    "12 · фейк: остаток --stat для файлов; тест bad-json folder_id проверяет другую ветку"
   ],
   "reviewers": {
     "manifestSpec": "abc0acae4069042f5",
