@@ -196,9 +196,10 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
             progress(min(attempts, total), total)
 
     uploaded: list[str] = []
+    out_id: str | None = None  # ID «На выгрузку», если папку создали в этом прогоне (ответ mkdir)
 
     def render(item: RenderItem) -> None:
-        nonlocal attempts, out_exists
+        nonlocal attempts, out_exists, out_id
         dst = out_local / item.out_name
         try:
             to_jpeg(fetch(item.source.name), item.variant, dst)
@@ -207,7 +208,7 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
             if progress:
                 progress(min(attempts, total), total)
         if not out_exists:  # «На выгрузку» — только когда есть что залить
-            drive.mkdir(out_dir)
+            out_id = drive.mkdir(out_dir)
             out_exists = True
         drive.push(dst, f"{out_dir}/{item.out_name}")
         uploaded.append(item.out_name)
@@ -241,7 +242,7 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
         skipped=len([i for i in ex.first_plan.skipped if i.out_name not in rendered]),
         failed=errors,
         orphans=list(ex.plan.orphans),
-        link=Drive.folder_link(drive.folder_id(out_dir)) if out_exists else None,
+        link=Drive.folder_link(out_id or drive.folder_id(out_dir)) if out_exists else None,
         status="partial" if errors else "done",
     )
 

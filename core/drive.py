@@ -312,9 +312,20 @@ class Drive:
         return True
 
     def folder_id(self, path: str) -> str | None:
-        res = self._check(self._run("lsjson", self.spec(path), "--stat"), "ID папки")
-        data = self._json(res, "{}")
-        return data.get("ID") or None
+        """ID папки из листинга родителя: Drive (общий диск) отдаёт `lsjson --stat` папки без ID
+        и медленно, а в листинге ID есть у каждой записи. Нет папки, родителя или ID → None."""
+        parts = _split(path)
+        if not parts:
+            return None
+        parent, name = "/".join(parts[:-1]), parts[-1]
+        res = self._run("lsjson", self.spec(parent), "--dirs-only", "--max-depth", "1")
+        if res.returncode != 0 and self._missing(res):
+            return None
+        self._check(res, "ID папки")
+        for e in self._json(res, "[]"):
+            if e.get("Name") == name and e.get("IsDir", True):
+                return str(e.get("ID") or "") or None
+        return None
 
     @staticmethod
     def folder_link(folder_id: str | None) -> str | None:

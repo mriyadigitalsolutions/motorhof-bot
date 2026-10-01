@@ -319,3 +319,28 @@ def test_progress_total_follows_render_plan(base, fake, drive, workdir, listing)
     job.run("MH_1022", listing, drive, workdir, lambda d, t: calls.append((d, t)), announce=said.append)
     assert said == ["MH_1022: 2 файла, конвертирую"]
     assert calls[0] == (0, 2) and calls[-1] == (2, 2)
+
+
+def test_link_on_first_and_repeat_run_without_extra_rclone_calls(base, fake, drive, workdir, listing):
+    """История 32: ID «На выгрузку» — из листинга «Фотографии/» (у --stat папки Drive нет ID).
+    Вызовов rclone на отчёт не больше, чем до правки: первый прогон 3 JPEG — 17, повторный — 10."""
+    from tests.fakes.fake_rclone import fake_id
+    photos = make_car(base)
+    for i in range(3):
+        make_jpeg(photos / f"p{i}.jpg", datetime(2026, 9, 1 + i))
+    link = "https://drive.google.com/drive/folders/" + fake_id(
+        "MOTORHOF_AUTO/MH_AUTO_НАЛИЧИЕ/2026/MH_1022_Mazda_2/Фотографии/На выгрузку")
+    parent = "motorhof:MOTORHOF_AUTO/MH_AUTO_НАЛИЧИЕ/2026/MH_1022_Mazda_2/Фотографии"
+
+    def id_lookups():
+        return [c for c in fake.commands("lsjson") if c[1] == parent and "--dirs-only" in c]
+
+    fake.calls.clear()
+    first = job.run("MH_1022", listing, drive, workdir, None)
+    assert first.link == link                       # папка только что создана
+    assert len(fake.calls) <= 17
+    assert len(id_lookups()) == 1                   # ID берётся из ответа mkdir, второй раз не ищется
+    fake.calls.clear()
+    again = job.run("MH_1022", listing, drive, workdir, None)
+    assert again.link == link
+    assert len(fake.calls) <= 10 and len(id_lookups()) == 1

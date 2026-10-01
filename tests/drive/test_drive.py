@@ -4,7 +4,8 @@ from __future__ import annotations
 import pytest
 
 from core.drive import CarAmbiguous, CarNotFound, Drive, DriveError
-from tests.fakes.drive_tree import make_car
+from tests.fakes.drive_tree import ROOT, make_car
+from tests.fakes.fake_rclone import fake_id
 
 
 @pytest.mark.parametrize(
@@ -298,7 +299,7 @@ def test_subprocess_runner_honours_timeout():
         ("list", "[\n"),
         ("list", '[{"Size": 1}]'),
         ("list", '[{"Name": "a.jpg", "Size": "много"}]'),
-        ("folder_id", "[]"),
+        ("folder_id", '{"Name": "На выгрузку"}'),
         ("folder_id", ""),
     ],
 )
@@ -350,3 +351,26 @@ def test_rename_outside_output_folder_is_refused_before_rclone(drive, fake, src,
     with pytest.raises(PermissionError):
         drive.rename(src, dst)
     assert fake.calls == []
+
+
+# --- ID папки из листинга родителя (история 32: --stat у Drive без ID) ---
+
+def test_folder_id_from_parent_listing_one_call(base, drive, fake):
+    make_car(base, "MH_AUTO_НАЛИЧИЕ", "2026", "MH_1022_Mazda_2", {"На выгрузку/x.jpg": b"x"})
+    (base / ROOT / "MH_AUTO_НАЛИЧИЕ/2026/MH_1022_Mazda_2/Фотографии/На выгрузк").mkdir()  # похожее имя
+    fake.calls.clear()
+    fid = drive.folder_id(OUT)
+    # ID как у Drive по пути именно «На выгрузку» (с пробелом и кириллицей)
+    assert fid == fake_id(f"{ROOT}/{OUT}")
+    assert fake.commands() == [[
+        "lsjson", f"motorhof:{ROOT}/MH_AUTO_НАЛИЧИЕ/2026/MH_1022_Mazda_2/Фотографии",
+        "--dirs-only", "--max-depth", "1",
+    ]]
+
+
+def test_folder_id_missing_is_none(base, drive, fake):
+    make_car(base, "MH_AUTO_НАЛИЧИЕ", "2026", "MH_1022_Mazda_2")
+    assert drive.folder_id(OUT) is None                          # папки нет
+    assert drive.folder_id(f"{OUT}/нет/глубже") is None           # нет и родителя
+    fake.fail("lsjson", returncode=0, stdout='[{"Name": "На выгрузку", "IsDir": true}]')
+    assert drive.folder_id(OUT) is None                          # запись без ID
