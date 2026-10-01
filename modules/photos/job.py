@@ -139,7 +139,7 @@ def _mtime(value: str) -> datetime | None:
         return None
 
 
-def _drive_text(code: str, e: DriveError) -> str:
+def drive_text(code: str, e: DriveError) -> str:
     text = f"{code}: ошибка Google Drive — {e.message}"
     if e.stderr_tail:
         text += "\nПоследние строки rclone:\n" + "\n".join(e.stderr_tail)
@@ -163,14 +163,15 @@ def run(code: str, variants: Iterable[Variant] | dict, drive: Drive, workdir: Pa
     try:
         report = _run(code, variants, drive, tmp, progress, announce)
     except DriveError as e:
-        raise DriveFailed(_drive_text(code, e)) from None
+        raise DriveFailed(drive_text(code, e)) from None
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     report.duration = time.monotonic() - started
     return report
 
 
-def _find(code: str, drive: Drive):
+def find_car(code: str, drive: Drive):
+    """Папка машины или JobError с текстом для партнёра."""
     try:
         return drive.find_car(code)
     except ValueError:
@@ -183,7 +184,7 @@ def _find(code: str, drive: Drive):
 
 def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
          progress: Progress | None, announce: Announce | None) -> Report:
-    car = _find(code, drive)
+    car = find_car(code, drive)
     src_dir, out_dir = drive.source_dir(car), drive.output_dir(car)
     if not drive.exists(src_dir):
         raise NoPhotosFolder(f'{code}: в папке машины нет подпапки "{drive.source_subdir}".')
@@ -195,17 +196,12 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
 
     out_exists = drive.exists(out_dir)
     outputs = {f.name for f in drive.list_files(out_dir)} if out_exists else set()
-    manifest_local = None
-    if MANIFEST_NAME in outputs:
-        manifest_local = drive.pull(f"{out_dir}/{MANIFEST_NAME}", tmp / MANIFEST_NAME)
-    try:
-        manifest = Manifest.load(manifest_local, mh=code)
-    except ManifestCorrupt as e:
-        log.warning("%s: %s не принят: %s", code, MANIFEST_NAME, e)
-        raise ManifestBroken(
-            f'{code}: файл учёта {MANIFEST_NAME} в папке "{drive.output_subdir}" повреждён. '
-            "Удали или исправь его — бот не будет перезаписывать папку вслепую."
-        ) from None
+    manifest = load_manifest(code, drive, out_dir, outputs, tmp)
+    if manifest.renumber is not None:
+        # прерванная перенумерация (/fotos … заново) — сначала довести, потом обычный цикл
+        from .renumber import complete
+        manifest = complete(drive, out_dir, manifest, outputs, tmp)
+        outputs = {f.name for f in drive.list_files(out_dir)}
     before = copy.deepcopy(manifest.files)
     existing = outputs - {MANIFEST_NAME}
 
@@ -304,6 +300,21 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
         link=Drive.folder_link(drive.folder_id(out_dir)) if out_exists else None,
         status="partial" if errors else "done",
     )
+
+
+def load_manifest(code: str, drive: Drive, out_dir: str, outputs: set[str], tmp: Path) -> Manifest:
+    """_manifest.json из «На выгрузку» (нет файла — пустой); битый → ManifestBroken."""
+    manifest_local = None
+    if MANIFEST_NAME in outputs:
+        manifest_local = drive.pull(f"{out_dir}/{MANIFEST_NAME}", tmp / MANIFEST_NAME)
+    try:
+        return Manifest.load(manifest_local, mh=code)
+    except ManifestCorrupt as e:
+        log.warning("%s: %s не принят: %s", code, MANIFEST_NAME, e)
+        raise ManifestBroken(
+            f'{code}: файл учёта {MANIFEST_NAME} в папке "{drive.output_subdir}" повреждён. '
+            "Удали или исправь его — бот не будет перезаписывать папку вслепую."
+        ) from None
 
 
 def _check_space(code: str, tmp: Path, download: int) -> None:

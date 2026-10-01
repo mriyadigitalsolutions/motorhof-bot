@@ -2,6 +2,9 @@
 
 Ключ — SHA-256 исходника; один sha256 получает один номер NN для всех вариантов.
 Выданные имена не меняются никогда; новые исходники получают max(NN)+1 по дате съёмки.
+Исключение — явная перенумерация (`renumber.py`): пока она не доведена, её план лежит в поле
+`renumber` манифеста (`{"phase": "pass1"|"pass2", "count", "moves": [[из, временное, в], ...],
+"files": [...]}`), после доведения поля нет.
 """
 from __future__ import annotations
 
@@ -66,12 +69,30 @@ class Execution:
     errors: list[tuple[str, str]] = field(default_factory=list)  # (имя исходника, причина)
 
 
+def _check_files(files: list) -> None:
+    for f in files:
+        if not isinstance(f, dict) or any(not isinstance(f.get(k), t) for k, t in _REQUIRED.items()):
+            raise ManifestCorrupt("манифест повреждён: запись без обязательных полей")
+
+
+def _check_renumber(r: object) -> None:
+    """План перенумерации: фаза, ходы [из, временное, в] строками, будущий список files."""
+    ok = (isinstance(r, dict) and r.get("phase") in ("pass1", "pass2")
+          and isinstance(r.get("moves"), list) and isinstance(r.get("files"), list)
+          and all(isinstance(m, list) and len(m) == 3 and all(isinstance(x, str) for x in m)
+                  for m in r["moves"]))
+    if not ok:
+        raise ManifestCorrupt("манифест повреждён: план перенумерации")
+    _check_files(r["files"])
+
+
 class Manifest:
     def __init__(self, mh: str | None, files: list[dict] | None = None,
-                 updated: str | None = None) -> None:
+                 updated: str | None = None, renumber: dict | None = None) -> None:
         self.mh = mh
         self.files: list[dict] = files or []
         self.updated = updated
+        self.renumber = renumber  # план незавершённой перенумерации или None
 
     # ---------- загрузка/выгрузка ----------
 
@@ -90,14 +111,18 @@ class Manifest:
             raise ManifestCorrupt(f"манифест повреждён: неизвестная версия {data.get('version')}")
         if mh is not None and data.get("mh") != mh:
             raise ManifestCorrupt(f"манифест от другой машины: {data.get('mh')}")
-        for f in data["files"]:
-            if not isinstance(f, dict) or any(not isinstance(f.get(k), t) for k, t in _REQUIRED.items()):
-                raise ManifestCorrupt("манифест повреждён: запись без обязательных полей")
-        return cls(data.get("mh"), data["files"], data.get("updated"))
+        _check_files(data["files"])
+        renumber = data.get("renumber")
+        if renumber is not None:
+            _check_renumber(renumber)
+        return cls(data.get("mh"), data["files"], data.get("updated"), renumber)
 
     def to_dict(self) -> dict:
-        return {"version": VERSION, "mh": self.mh, "updated": self.updated,
+        data = {"version": VERSION, "mh": self.mh, "updated": self.updated,
                 "files": sorted(self.files, key=lambda f: (f["nn"], f["variant"]))}
+        if self.renumber is not None:
+            data["renumber"] = self.renumber
+        return data
 
     def dump(self, path: Path) -> None:
         """Пишет атомарно: .part + переименование."""

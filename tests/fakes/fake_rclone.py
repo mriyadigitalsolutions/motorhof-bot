@@ -1,7 +1,7 @@
 """Фейковый rclone поверх локальной папки — runner для `core.drive.Drive`.
 
 Понимает то подмножество rclone, которым пользуется Drive-слой: `lsjson` (`--dirs-only`,
-`--files-only`, `--max-depth`, `--hash`, `--stat`), `copyto`, `mkdir`, `deletefile`.
+`--files-only`, `--max-depth`, `--hash`, `--stat`), `copyto`, `moveto`, `mkdir`, `deletefile`.
 Отдаёт `ID` и `Hashes.sha256` как Google Drive. Путь `<remote>:<путь>` ведёт в `base/<путь>`,
 путь без двоеточия — обычный локальный файл.
 
@@ -195,6 +195,14 @@ class FakeRclone:
             return RunResult(3, "", NOTICE + "\nERROR : file not found\n")
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dst)
+        return RunResult(0, "", NOTICE + "\n")
+
+    def _cmd_moveto(self, paths: list[str], flags: list[str]) -> RunResult:
+        src, dst = self._local(paths[0]), self._local(paths[1])
+        if not src.is_file():
+            return RunResult(3, "", NOTICE + "\nERROR : file not found\n")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        src.replace(dst)
         return RunResult(0, "", NOTICE + "\n")
 
     def _cmd_mkdir(self, paths: list[str], flags: list[str]) -> RunResult:

@@ -1,4 +1,5 @@
 """Модуль photos: команда /fotos, задача "photos.convert" (полный цикл машины),
+перенумерация по дате (/fotos … заново, кнопки phr:*, задача "photos.renumber"),
 напоминание об удалении DNG (ночная проверка, кнопки ph:*, задача "photos.delete_dng")."""
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ from core.settings import Settings, load_settings
 
 from . import handlers
 from .reminders import KIND_DELETE, Reminders
+from .renumber import KIND as KIND_RENUMBER, Renumberer
 
 MODULE = handlers.MODULE
 HELP = handlers.HELP
@@ -27,13 +29,16 @@ def register(router: Router, queue: JobQueue, *, settings: Settings | None = Non
     drive = drive or Drive.from_settings(settings)
     workdir = workdir or settings.tmp_dir
     service = Reminders(queue, drive, workdir, days=settings.dng_reminder_days)
-    router.message.register(handlers.make_command(queue), Command(handlers.COMMAND))
+    renumber = Renumberer(queue, drive, workdir)
+    router.message.register(handlers.make_command(queue, renumber), Command(handlers.COMMAND))
     queue.register_kind(handlers.KIND,
                         handlers.make_job(queue, drive, workdir, settings.secrets(),
                                           on_done=service.record_done),
                         on_interrupted=handlers.make_interrupted(queue.db))
     queue.register_kind(KIND_DELETE, service.run_delete, on_interrupted=service.interrupted)
+    queue.register_kind(KIND_RENUMBER, renumber.handle, on_interrupted=renumber.interrupted)
     queue.every_day(settings.daily_check_time, service.check)
-    router.callback_query.register(handlers.make_buttons(service), F.data.startswith("ph:"))
+    router.callback_query.register(handlers.make_buttons(service, renumber),
+                                   F.data.startswith(handlers.BUTTON_PREFIXES))
     router.startup.register(handlers.make_startup(service))
     return service

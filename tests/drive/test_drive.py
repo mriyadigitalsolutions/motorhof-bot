@@ -313,3 +313,40 @@ def test_bad_json_from_rclone_is_drive_error(base, drive, fake, op, stdout):
     }[op]
     with pytest.raises(DriveError):
         action()
+
+
+# --- переименование внутри «На выгрузку» (перенумерация, история 23a) ---
+
+OUT = "MH_AUTO_НАЛИЧИЕ/2026/MH_1022_Mazda_2/Фотографии/На выгрузку"
+
+
+def test_rename_inside_output_folder(base, drive, fake):
+    photos = make_car(base, files={"На выгрузку/MH_1022_02.jpg": b"two"})
+    drive.rename(f"{OUT}/MH_1022_02.jpg", f"{OUT}/MH_1022_01.jpg")
+    out = photos / "На выгрузку"
+    assert sorted(p.name for p in out.iterdir()) == ["MH_1022_01.jpg"]
+    assert (out / "MH_1022_01.jpg").read_bytes() == b"two"
+    assert len(fake.commands("moveto")) == 1
+
+
+@pytest.mark.parametrize(
+    "src,dst",
+    [
+        # источник не в «На выгрузку»
+        ("MH_AUTO_НАЛИЧИЕ/2026/MH_1022_Mazda_2/Фотографии/IMG_1.DNG", f"{OUT}/x.jpg"),
+        # цель не в «На выгрузку»
+        (f"{OUT}/MH_1022_01.jpg", "MH_AUTO_НАЛИЧИЕ/2026/MH_1022_Mazda_2/Фотографии/x.jpg"),
+        # вложенная папка внутри «На выгрузку»
+        (f"{OUT}/sub/MH_1022_01.jpg", f"{OUT}/MH_1022_01.jpg"),
+        (f"{OUT}/MH_1022_01.jpg", f"{OUT}/sub/MH_1022_01.jpg"),
+        # другая машина
+        (f"{OUT}/MH_1022_01.jpg", "MH_AUTO_НАЛИЧИЕ/2026/MH_7_X/Фотографии/На выгрузку/a.jpg"),
+        # сама папка, а не файл в ней
+        (OUT, f"{OUT}/a.jpg"),
+        (f"{OUT}/../На выгрузку/a.jpg", f"{OUT}/b.jpg"),
+    ],
+)
+def test_rename_outside_output_folder_is_refused_before_rclone(drive, fake, src, dst):
+    with pytest.raises(PermissionError):
+        drive.rename(src, dst)
+    assert fake.calls == []

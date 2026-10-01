@@ -34,6 +34,8 @@ def test_real_rclone_on_local_folder_with_cyrillic(tmp_path):
     drive.mkdir(out_dir)
     drive.push(local, f"{out_dir}/MH_1022_01.jpg")
     assert (base / ROOT / out_dir / "MH_1022_01.jpg").read_bytes() == b"abc"
+    drive.rename(f"{out_dir}/MH_1022_01.jpg", f"{out_dir}/.renumber-MH_1022_01.jpg")
+    assert sorted(p.name for p in (base / ROOT / out_dir).iterdir()) == [".renumber-MH_1022_01.jpg"]
 
     ko = drive.find_car("KO_2001")
     dng = f"{drive.source_dir(ko)}/IMG_2.DNG"

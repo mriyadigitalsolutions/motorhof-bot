@@ -5,8 +5,9 @@
 собирается здесь же: `<remote>:<root>/<путь>`; при `remote=""` или если `remote` — локальная
 папка, адрес — локальный путь (так тесты гоняют настоящий rclone на локальном бэкенде).
 
-Писать можно только в `<машина>/<SOURCE_SUBDIR>/<OUTPUT_SUBDIR>/`, удалять — только DNG прямо
-в `<машина>/<SOURCE_SUBDIR>/`. Остальное — `PermissionError` до вызова rclone.
+Писать можно только в `<машина>/<SOURCE_SUBDIR>/<OUTPUT_SUBDIR>/`, переименовывать — только файл
+прямо в этой папке в другое имя в ней же, удалять — только DNG прямо в `<машина>/<SOURCE_SUBDIR>/`.
+Остальное — `PermissionError` до вызова rclone.
 """
 from __future__ import annotations
 
@@ -344,6 +345,15 @@ class Drive:
         if not ok:
             raise PermissionError(f"удалять можно только DNG прямо в «{self.source_subdir}»: {path}")
 
+    def _check_rename(self, src: str, dst: str) -> None:
+        """И источник, и цель — файлы прямо в «На выгрузку» одной и той же машины."""
+        a, b = _split(src), _split(dst)
+        ok = all(self._car_parts(p) and len(p) == 6 and p[4] == self.output_subdir for p in (a, b))
+        if not ok or a[:5] != b[:5]:
+            raise PermissionError(
+                f"переименовывать можно только файлы внутри «{self.source_subdir}/{self.output_subdir}»: "
+                f"{src} -> {dst}")
+
     def push(self, local: Path, path: str) -> None:
         self._check_write(path, file=True)
         self._check(self._run("copyto", str(Path(local)), self.spec(path)), "загрузка")
@@ -352,6 +362,11 @@ class Drive:
         self._check_write(path, file=False)
         self._check(self._run("mkdir", self.spec(path)), "создание папки")
         return self.folder_id(path)
+
+    def rename(self, src: str, dst: str) -> None:
+        """Переименование файла внутри «На выгрузку» (rclone moveto); цель перезаписывается."""
+        self._check_rename(src, dst)
+        self._check(self._run("moveto", self.spec(src), self.spec(dst)), "переименование")
 
     def delete_to_trash(self, path: str) -> None:
         self._check_delete(path)

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from aiogram.filters import CommandObject
+from aiogram.methods import SendMessage
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from core.db import Database
@@ -23,6 +24,7 @@ from core.log import redact
 from core.queue import Job, JobQueue, QueueFull
 
 from . import job as job_mod
+from . import renumber as renumber_mod
 from .convert import Variant, load_variants
 
 log = logging.getLogger(__name__)
@@ -32,7 +34,9 @@ MODULE = "photos"
 KIND = "photos.convert"
 CODE_HINT = "Укажи номер машины с префиксом: /fotos MH_1022 или /fotos KO_2001"
 HELP = ("/fotos MH_1022 — конвертировать фото машины в JPEG (или KO_2001)\n"
-        "/fotos MH_1022 full — то же плюс полноразмерные JPEG")
+        "/fotos MH_1022 full — то же плюс полноразмерные JPEG\n"
+        "/fotos MH_1022 заново — перенумеровать «На выгрузку» по дате съёмки")
+RENUMBER_WORD = "заново"
 
 # Какая запись runs открыта для какой задачи — чтобы при перезапуске закрыть ровно её.
 SCHEMA = """
@@ -58,6 +62,7 @@ class BadRequest(Exception):
 class Request:
     code: str
     extra: list[str] = field(default_factory=list)
+    action: str = "convert"  # convert | renumber («заново»)
 
 
 def parse_request(args: str | None, variants: dict[str, Variant] | None = None) -> Request:
@@ -69,6 +74,10 @@ def parse_request(args: str | None, variants: dict[str, Variant] | None = None) 
     words = (m.group(3) or "").split()
     if not words:
         return Request(code)
+    if any(w.lower() == RENUMBER_WORD for w in words):
+        if len(words) > 1:
+            raise BadRequest(f"«{RENUMBER_WORD}» пишется без вариантов: /fotos {code} {RENUMBER_WORD}")
+        return Request(code, action="renumber")
     variants = load_variants() if variants is None else variants
     available = [v.name for v in variants.values() if v.on_demand]
     extra: list[str] = []
@@ -88,6 +97,11 @@ def submit(queue: JobQueue, args: str | None, chat_id: int, telegram_id: int,
         req = parse_request(args, variants)
     except BadRequest as e:
         return e.text
+    if req.action == "renumber":  # вопрос с кнопками — через answer(..., renumber=...)
+        return CODE_HINT
+    position = renumber_mod.busy(queue, req.code)
+    if position is not None and _renumber_job(queue, req.code):
+        return renumber_mod.busy_text(req.code, position)
     try:
         result = queue.enqueue(MODULE, KIND, {"key": req.code, "variants": req.extra},
                                chat_id, telegram_id, user_name)
@@ -100,6 +114,26 @@ def submit(queue: JobQueue, args: str | None, chat_id: int, telegram_id: int,
             text = f"{req.code} уже в очереди, позиция {result.position}"
         return text + _not_added(queue, result.duplicate_of, req.extra)
     return f"{req.code}: в очереди, позиция {result.position}"
+
+
+def _renumber_job(queue: JobQueue, code: str) -> bool:
+    """Машина занята именно перенумерацией (дубль /fotos с /fotos отвечает submit сам)."""
+    st = queue.status()
+    jobs = ([st.current] if st.current else []) + st.queued
+    return any(j.kind == renumber_mod.KIND and j.key == code for j in jobs)
+
+
+def answer(queue: JobQueue, args: str | None, chat_id: int, telegram_id: int, user_name: str,
+           renumber: "renumber_mod.Renumberer | None" = None,
+           variants: dict[str, Variant] | None = None) -> tuple[str, list[tuple[str, str]] | None]:
+    """Ответ на /fotos: (текст, кнопки). «заново» — вопрос с кнопками, остальное — submit."""
+    try:
+        req = parse_request(args, variants)
+    except BadRequest as e:
+        return e.text, None
+    if req.action == "renumber" and renumber is not None:
+        return renumber.ask(req.code, telegram_id, chat_id, user_name)
+    return submit(queue, args, chat_id, telegram_id, user_name, variants), None
 
 
 def _not_added(queue: JobQueue, job_id: int, extra: list[str]) -> str:
@@ -211,14 +245,23 @@ def user_name(user) -> str:
     return user.first_name or user.username or str(user.id)
 
 
-def make_command(queue: JobQueue):
+def _markup(buttons):
+    if not buttons:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=t, callback_data=d) for t, d in buttons]])
+
+
+def make_command(queue: JobQueue, renumber: "renumber_mod.Renumberer | None" = None):
     async def on_fotos(message: Message, command: CommandObject) -> None:
         user = message.from_user
-        text = submit(queue, command.args, message.chat.id, user.id if user else 0,
-                      user_name(user))
-        await message.answer(text)
+        text, buttons = answer(queue, command.args, message.chat.id, user.id if user else 0,
+                               user_name(user), renumber=renumber)
+        await message.answer(text, reply_markup=_markup(buttons))
 
     return on_fotos
+
+
 
 
 # ---------- кнопки напоминания об удалении DNG ----------
@@ -227,17 +270,17 @@ def bot_sender(bot):
     """Отправка сообщений модуля через Bot: (chat_id, text, кнопки [(текст, callback_data)])."""
 
     async def send(chat_id: int, text: str, buttons=None) -> None:
-        markup = None
-        if buttons:
-            markup = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text=t, callback_data=d) for t, d in buttons]])
-        await bot.send_message(chat_id, text, reply_markup=markup)
+        await bot.send_message(chat_id, text, reply_markup=_markup(buttons))
 
     return send
 
 
-def make_buttons(service):
-    """Обработчик нажатий ph:del|keep|ok|no:<id>. Права админа — из `access` бота (dp["access"])."""
+BUTTON_PREFIXES = ("ph:", f"{renumber_mod.PREFIX}:")  # фильтр роутера для make_buttons
+
+
+def make_buttons(service, renumber: "renumber_mod.Renumberer | None" = None):
+    """Обработчик нажатий ph:del|keep|ok|no:<id> (напоминание о DNG) и phr:go|no:<id>
+    (вопрос «заново»). Права админа — из `access` бота (dp["access"])."""
 
     async def on_button(callback: CallbackQuery, bot=None, access=None) -> None:
         if service.sender is None and bot is not None:
@@ -245,6 +288,13 @@ def make_buttons(service):
         user = callback.from_user
         chat = callback.message.chat.id if callback.message else None
         await callback.answer()
+        if renumber is not None and (callback.data or "").startswith(f"{renumber_mod.PREFIX}:"):
+            text = renumber.press(callback.data, user.id)
+            if bot is not None:
+                await SendMessage(chat_id=chat if chat is not None else user.id, text=text).as_(bot)
+            elif callback.message is not None:
+                await callback.message.answer(text)
+            return
         if access is None:
             log.error("кнопка %s: бот не передал access (dp[\"access\"]), права админа не проверить",
                       callback.data)
