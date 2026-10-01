@@ -73,7 +73,7 @@ class Dialogs:
         out = self.engine.text(session, text, self.clock())
         await self._apply(out, message, state, message.from_user)
         if (out.kind == "closed" and out.text == EXPIRED and self.menu is not None
-                and self.menu.is_label(text) and normalize_label(text) != BACK_LABEL):
+                and self.menu.is_label(text) and normalize_label(text) != normalize_label(BACK_LABEL)):
             # диалог закрыт таймаутом, а партнёр нажал кнопку меню — обработать нажатие;
             # «Назад» — нет: партнёр остаётся на экране, откуда начат диалог
             await menu_mod.handle_label(message, state, self.menu, self)

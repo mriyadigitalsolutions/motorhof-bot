@@ -16,8 +16,10 @@ from tests.fakes.chat import alerts, keyboards, reply_to, screens, sent
 from tests.fakes.telegram import ChatBot
 
 ANNA, BORIS, STRANGER, GROUP = 1, 2, 42, -1001234
-MAIN = [["CRM"], ["Google Drive"], ["Демо"]]
-DEMO = [["Спросить"], ["Привет"], ["Назад"]]
+MAIN = [["🗂 CRM", "📁 Google Drive"], ["Демо"]]
+DEMO = [["Спросить", "Привет"], ["⬅️ Назад"]]
+NAV = ["⬅️ Назад", "✖️ Отмена"]
+DRIVE = [["📸 Форматировать фото", "⬅️ Назад"]]
 
 
 class Clock:
@@ -117,15 +119,15 @@ async def test_dialog_on_keyboard_from_button_to_finish(app, tg):
     anna = Chat_(app, tg, ANNA)
     await anna.say("Демо")
     await anna.say("Спросить")
-    assert last(tg) == ("Тип?", [["MH"], ["KO"], ["Назад", "Отмена"]])
+    assert last(tg) == ("Тип?", [["MH", "KO"], NAV])
     await anna.say("сосед")
-    assert last(tg) == ("Выбери вариант кнопкой.\n\nТип?", [["MH"], ["KO"], ["Назад", "Отмена"]])
+    assert last(tg) == ("Выбери вариант кнопкой.\n\nТип?", [["MH", "KO"], NAV])
     await anna.say("KO")
-    assert last(tg) == ("Номер?", [["Назад", "Отмена"]])
+    assert last(tg) == ("Номер?", [NAV])
     await anna.say("abc")
-    assert last(tg) == ("Только цифры\n\nНомер?", [["Назад", "Отмена"]])
+    assert last(tg) == ("Только цифры\n\nНомер?", [NAV])
     await anna.say("2001")
-    assert last(tg) == ("Что будет сделано:\nПапка KO_2001", [["Выполнить"], ["Назад", "Отмена"]])
+    assert last(tg) == ("Что будет сделано:\nПапка KO_2001", [["✅ Выполнить"], NAV])
     await anna.say("Выполнить")
     assert last(tg) == ("Готово: KO_2001", DEMO)
     values, ctx = app.finished[0]
@@ -177,7 +179,7 @@ async def test_group_ignores_unrecognized_text_outside_dialog(app, tg):
 async def test_private_unrecognized_message_shows_menu(app, tg):
     await Chat_(app, tg, ANNA).say("что умеешь?")
     await Chat_(app, tg, ANNA).say("/neizvestno")
-    assert screens(tg) == [("Главное меню", ["CRM", "Google Drive", "Демо"])] * 2
+    assert screens(tg) == [("Главное меню", ["🗂 CRM", "📁 Google Drive", "Демо"])] * 2
 
 
 async def test_stranger_gets_nothing(app, tg):
@@ -231,7 +233,7 @@ async def test_menu_button_after_timeout_is_handled(app, tg):
     await anna.say("Google Drive")
     assert [t for t, _ in screens(tg)][-2:] == [
         "Диалог закрыт: 10 минут без ответа. Начни заново из /menu.", "Google Drive"]
-    assert keyboards(tg)[-2:] == [DEMO, [["Форматировать фото"], ["Назад"]]]
+    assert keyboards(tg)[-2:] == [DEMO, DRIVE]
 
 
 async def test_dialog_survives_nine_minutes_pause(app, tg):
@@ -259,7 +261,7 @@ async def test_old_dng_buttons_still_reach_photos(app, tg):
 
 
 async def test_real_main_menu_has_crm_inactive_and_drive(tmp_path):
-    """Приёмка: /menu — [CRM] / [Google Drive]; CRM в разработке; Google Drive — фото и «Назад»."""
+    """Приёмка: /menu — [🗂 CRM · 📁 Google Drive]; CRM в разработке; Google Drive — фото и «Назад» в ряд."""
     settings = load_settings({"ALLOWED_TELEGRAM_IDS": f"{ANNA}", "ADMIN_TELEGRAM_IDS": "",
                               "DB_PATH": str(tmp_path / "db.sqlite"),
                               "TMP_DIR": str(tmp_path / "tmp")})
@@ -268,13 +270,13 @@ async def test_real_main_menu_has_crm_inactive_and_drive(tmp_path):
         tg = ChatBot()
         anna = Chat_(app, tg, ANNA)
         await anna.say("/menu")
-        assert last(tg) == ("Главное меню", [["CRM"], ["Google Drive"]])
-        await anna.say("CRM")
+        assert last(tg) == ("Главное меню", [["🗂 CRM", "📁 Google Drive"]])
+        await anna.say("🗂 CRM")
         assert last(tg) == ("В разработке", None)
-        await anna.say("Google Drive")
-        assert last(tg) == ("Google Drive", [["Форматировать фото"], ["Назад"]])
-        await anna.say("Назад")
-        assert last(tg) == ("Главное меню", [["CRM"], ["Google Drive"]])
+        await anna.say("📁 Google Drive")
+        assert last(tg) == ("Google Drive", DRIVE)
+        await anna.say("⬅️ Назад")
+        assert last(tg) == ("Главное меню", [["🗂 CRM", "📁 Google Drive"]])
     finally:
         app.db.close()
 
@@ -325,3 +327,35 @@ async def test_labels_are_normalized_the_same_in_menu_and_dialog(app, tg):
     assert last(tg)[0] == "Номер?"
     await anna.say(" Назад ")
     assert last(tg)[0] == "Тип?"
+
+
+async def test_buttons_with_icons_and_old_plain_labels_both_work(app, tg):
+    """Нажатие новой кнопки (со значком) и подпись старой клавиатуры (без значка) — одно и то же."""
+    anna = Chat_(app, tg, ANNA)
+    await anna.say("📁 Google Drive")
+    assert last(tg) == ("Google Drive", DRIVE)
+    await anna.say("⬅️ Назад")
+    assert last(tg) == ("Главное меню", MAIN)
+    await anna.say("Google Drive")
+    assert last(tg) == ("Google Drive", DRIVE)
+    await anna.say("Демо")
+    await anna.say("Спросить")
+    await anna.say("MH")
+    await anna.say("⬅️ Назад")
+    assert last(tg)[0] == "Тип?"
+    await anna.say("KO")
+    await anna.say("1")
+    await anna.say("✅ Выполнить")
+    assert last(tg) == ("Готово: KO_1", DEMO)
+    await anna.say("Спросить")
+    await anna.say("✖️ Отмена")
+    assert last(tg) == ("Отменено", DEMO)
+
+
+async def test_back_with_icon_after_timeout_stays_on_dialog_screen(app, tg):
+    anna = Chat_(app, tg, ANNA)
+    await anna.say("Спросить")
+    app.clock.now += timedelta(minutes=11)
+    await anna.say("⬅️ Назад")
+    assert keyboards(tg)[-1] == DEMO
+    assert [t for t, _ in screens(tg)].count("Главное меню") == 0

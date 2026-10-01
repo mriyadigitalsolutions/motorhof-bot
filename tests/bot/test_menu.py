@@ -14,31 +14,70 @@ def tree():
     """drive объявляет экран, photos ставит кнопку в чужой экран через parent, crm неактивна."""
     menu = Menu()
     drive, photos, crm = menu.scope("drive"), menu.scope("photos"), menu.scope("crm")
-    photos.action("convert", "Форматировать фото", parent="drive", order=10, dialog=dialog())
-    drive.section("drive", "Google Drive")
+    photos.action("convert", "Форматировать фото", parent="drive", order=10, dialog=dialog(),
+                  icon="📸")
+    drive.section("drive", "Google Drive", icon="📁")
     drive.action("lager", "Машины в наличии", parent="drive", order=50, handler=lambda ctx: "список")
-    crm.section("crm", "CRM")
+    crm.section("crm", "CRM", icon="🗂")
     menu.configure({"crm": {"order": 10, "enabled": False}, "drive": {"order": 20}})
     menu.validate()
     return menu
 
 
-def test_main_menu_has_two_module_buttons_in_config_order():
+def test_main_menu_has_two_module_buttons_in_one_row_in_config_order():
     screen = tree().screen(ROOT)
     assert screen.text == "Главное меню"
-    assert screen.rows == [["CRM"], ["Google Drive"]]
+    assert screen.rows == [["🗂 CRM", "📁 Google Drive"]]
 
 
-def test_module_screen_shows_foreign_button_one_per_row_and_back():
+def test_module_screen_shows_buttons_two_per_row_and_back_below():
     screen = tree().screen("drive")
     assert screen.text == "Google Drive"
-    assert screen.rows == [["Форматировать фото"], ["Машины в наличии"], ["Назад"]]
+    assert screen.rows == [["📸 Форматировать фото", "Машины в наличии"], ["⬅️ Назад"]]
+
+
+def test_single_button_shares_row_with_back():
+    menu = Menu()
+    menu.scope("drive").section("drive", "Google Drive", icon="📁")
+    menu.scope("photos").action("convert", "Форматировать фото", parent="drive", icon="📸",
+                                dialog=dialog())
+    menu.validate()
+    assert menu.screen("drive").rows == [["📸 Форматировать фото", "⬅️ Назад"]]
+
+
+def test_odd_last_button_takes_whole_row():
+    menu = tree()
+    menu.scope("demo").action("third", "Третья", parent="drive", order=60, handler=lambda c: "")
+    menu.validate()
+    assert menu.screen("drive").rows == [["📸 Форматировать фото", "Машины в наличии"],
+                                         ["Третья"], ["⬅️ Назад"]]
+
+
+def test_screen_text_has_no_icon_and_label_has_one():
+    menu = tree()
+    assert menu.press_label("📁 Google Drive", None).screen.text == "Google Drive"
+    assert menu.screen(ROOT).text == "Главное меню"
+
+
+@pytest.mark.parametrize("label", ["📁 Google Drive", "Google Drive", " 📁Google Drive "])
+def test_label_with_and_without_icon_finds_button(label):
+    assert tree().press_label(label, None).screen_id == "drive"
+
+
+@pytest.mark.parametrize("label", ["⬅️ Назад", "Назад", "⬅ Назад"])
+def test_back_with_and_without_icon(label):
+    assert tree().press_label(label, "drive").screen_id == ROOT
+
+
+def test_icon_must_be_only_symbols():
+    with pytest.raises(ValueError, match="значок"):
+        Menu().scope("drive").section("drive", "Google Drive", icon="G")
 
 
 def test_reply_keyboard_is_persistent_resized_and_selective():
-    kb = reply_keyboard([["CRM"], ["Google Drive"]])
+    kb = reply_keyboard([["🗂 CRM", "📁 Google Drive"]])
     assert isinstance(kb, ReplyKeyboardMarkup)
-    assert [[b.text for b in row] for row in kb.keyboard] == [["CRM"], ["Google Drive"]]
+    assert [[b.text for b in row] for row in kb.keyboard] == [["🗂 CRM", "📁 Google Drive"]]
     assert kb.resize_keyboard and kb.is_persistent and kb.selective
 
 
@@ -74,13 +113,14 @@ def test_buttons_inside_disabled_section_are_disabled_too():
     assert menu.press_label("Машины в наличии", None).kind == "handler"
 
 
-@pytest.mark.parametrize("label", ["Привет", "", "google drive"])
+@pytest.mark.parametrize("label", ["Привет", "", "google drive", "📁", "Google Drive 📁"])
 def test_unknown_label(label):
     assert tree().press_label(label, None).kind == "none"
 
 
-def test_labels_are_all_buttons_and_back():
+def test_labels_are_all_buttons_and_back_normalized():
     assert tree().labels() == {"CRM", "Google Drive", "Форматировать фото", "Машины в наличии", "Назад"}
+    assert tree().is_label("📸 Форматировать фото") and tree().is_label("⬅️ Назад")
 
 
 def test_empty_section_says_so():
@@ -89,21 +129,24 @@ def test_empty_section_says_so():
     menu.validate()
     screen = menu.screen("drive")
     assert screen.text == "Google Drive\n\nЗдесь пока ничего нет"
-    assert screen.rows == [["Назад"]]
+    assert screen.rows == [["⬅️ Назад"]]
 
 
-def test_duplicate_label_stops_start():
+@pytest.mark.parametrize("title, icon", [("CRM", ""), ("CRM", "📇"), ("🗂 CRM", "")])
+def test_duplicate_label_stops_start(title, icon):
+    """Подписи сравниваются без значков: «📇 CRM» и «🗂 CRM» — одна кнопка."""
     menu = tree()
-    menu.scope("other").section("other", "CRM")
+    menu.scope("other").section("other", title, icon=icon)
     with pytest.raises(ValueError, match="CRM"):
         menu.validate()
 
 
-@pytest.mark.parametrize("label", ["Назад", "Отмена", "Выполнить"])
-def test_service_label_on_menu_button_stops_start(label):
+@pytest.mark.parametrize("label, icon", [("Назад", ""), ("Отмена", ""), ("Выполнить", ""),
+                                         ("Назад", "🔙"), ("⬅️ Назад", ""), ("Отмена", "✖️")])
+def test_service_label_on_menu_button_stops_start(label, icon):
     menu = tree()
-    menu.scope("other").action("x", label, parent="drive", handler=lambda c: "")
-    with pytest.raises(ValueError, match=label):
+    menu.scope("other").action("x", label, parent="drive", handler=lambda c: "", icon=icon)
+    with pytest.raises(ValueError, match="занята"):
         menu.validate()
 
 

@@ -9,8 +9,9 @@ from __future__ import annotations
 MODULE = "drive"
 SCREEN = "drive"
 TITLE = "Google Drive"
+ICON = "📁"  # только на кнопке; в тексте экрана «Google Drive» без значка
 
 
 def register(router, queue, *, menu=None, **_: object) -> None:
     if menu is not None:
-        menu.section(SCREEN, TITLE)
+        menu.section(SCREEN, TITLE, icon=ICON)
