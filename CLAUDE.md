@@ -2,14 +2,14 @@
 
 Единый Telegram-бот MOTORHOF OG на Hetzner. Модульная архитектура: core/ общее, modules/<имя>/ по задаче.
 Первый модуль: photos (команда /fotos, конвертация фото машин из Google Drive в JPEG).
-Полная спецификация: PLAN.md. Она главнее любых предположений.
+Главный документ — ТЗ v1.0: `docs/TZ.md` (меню, модули, фазы A–F). `PLAN.md` — исходная спецификация модуля photos; при расхождении главнее ТЗ (решение заказчика 2026-10-01).
 
 ## Правила
 - Язык общения и комментариев в коде: русский. Имена в коде: английский.
 - Сначала план (шаги, файлы, библиотеки, что может пойти не так), код только после моего "ок".
 - Один шаг = один коммит. Сообщение коммита: "<модуль или core>: что сделано".
 - Секреты только в .env и rclone.conf, оба в .gitignore. Никогда не печатать их содержимое и не просить их.
-- Не трогать в Drive ничего вне папки Фотографии/ конкретной машины.
+- Drive (ТЗ 3.5): бот только создаёт папку машины (с подпапками Фотографии, Документы, Verkauf) в НАЛИЧИЕ, переносит папку машины целиком, пишет файлы в Фотографии/ и JPEG в Фотографии/На выгрузку/; удаляет только DNG в Фотографии/ — в корзину, после подтверждения админа. Документы и Verkauf не читать.
 - Модули не импортируют друг друга; общее только через core/.
 - Не менять PLAN.md без прямого указания; расхождение с планом = вопрос мне.
 - Python 3.12, pathlib везде, никаких os.system и shell=True.
@@ -46,13 +46,13 @@ modules/        __init__.py — ENABLED, MENU (порядок и активно�
                 variants.yaml, __main__.py (CLI)
   _template/    заготовка модуля (/template, kind _template.echo)
 tests/          по папке на слой: core/ drive/ bot/ photos/ photos_job/ photos_reminders/; fakes/ (telegram.py ChatBot, chat.py Partner); fixtures/
-Dockerfile, docker-compose.yml (сервис bot, контейнер motorhof-bot), .env.example, PLAN.md (спецификация, главнее всего); ТЗ v1.0 (меню, фазы A–F) — TZ.md у заказчика
+Dockerfile, docker-compose.yml (сервис bot, контейнер motorhof-bot), .env.example, docs/TZ.md (ТЗ v1.0, главный документ), PLAN.md (спецификация модуля photos)
 docs/adr/       решения; 0008 — реестр меню
 ```
 
 ## Ключевые файлы
 
-- `PLAN.md` — спецификация; не менять, расхождение с ней — вопрос заказчику.
+- `docs/TZ.md` — главный документ (ТЗ v1.0); `PLAN.md` — спецификация модуля photos. Оба не менять без прямого указания, расхождение — вопрос заказчику.
 - `modules/photos/job.py` — `run(code, variants, drive, workdir, progress, *, announce) -> Report`; ошибки — подклассы `JobError(user_text)`.
 - `modules/photos/manifest.py` — `_manifest.json`, `Manifest.execute`, `sha256_file`, `MANIFEST_NAME` (единственное место).
 - `modules/photos/variants.yaml` — варианты JPEG (`listing` всегда, `full` по `on_demand`); новые варианты — только здесь.
