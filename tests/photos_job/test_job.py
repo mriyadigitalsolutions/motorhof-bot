@@ -137,12 +137,12 @@ def test_not_enough_space_in_tmp(base, fake, drive, workdir, listing, monkeypatc
     make_jpeg(photos / "a.jpg", datetime(2026, 9, 1))
     size = (photos / "a.jpg").stat().st_size
     usage = shutil.disk_usage(workdir)
-    monkeypatch.setattr(shutil, "disk_usage", lambda p: usage._replace(free=int(size * 1.1)))
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: usage._replace(free=int(size * 1.1) + 8_000_000))
     with pytest.raises(job.JobError) as e:
         job.run("MH_1022", listing, drive, workdir, None)
     assert "не хватает места" in e.value.user_text
     assert pulled(fake) == [] and _only_reads(fake)
-    monkeypatch.setattr(shutil, "disk_usage", lambda p: usage._replace(free=int(size * 1.3)))
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: usage._replace(free=int(size * 1.3) + 8_000_000))
     assert job.run("MH_1022", listing, drive, workdir, None).done == 1
 
 
@@ -194,10 +194,12 @@ def test_tmp_removed_after_success_and_after_error(base, fake, drive, workdir, l
     with pytest.raises(job.JobError):
         job.run("MH_1022", listing, drive, workdir, None)
     assert list(workdir.iterdir()) == []
-    # залитое до сбоя учтено в манифесте, упавший — нет
+    # номера обоих в манифесте, незалитый _02 на Drive отсутствует — повторный прогон его пересоздаёт
     manifest = json.loads((photos / "На выгрузку" / "_manifest.json").read_text(encoding="utf-8"))
-    assert [f["out"] for f in manifest["files"]] == ["MH_1022_01.jpg"]
-    job.run("MH_1022", listing, drive, workdir, None)
+    assert sorted(f["out"] for f in manifest["files"]) == ["MH_1022_01.jpg", "MH_1022_02.jpg"]
+    assert not (photos / "На выгрузку" / "MH_1022_02.jpg").exists()
+    assert job.run("MH_1022", listing, drive, workdir, None).done == 1
+    assert (photos / "На выгрузку" / "MH_1022_02.jpg").exists()
     assert list(workdir.iterdir()) == []
 
 
@@ -284,7 +286,7 @@ def test_upload_failure_keeps_uploaded_in_manifest(base, fake, drive, workdir, l
     fake.calls.clear()
     again = job.run("MH_1022", listing, drive, workdir, None)
     assert [n for n in pulled(fake) if n != "_manifest.json"] == ["p2.jpg"]
-    assert pushed(fake) == ["MH_1022_03.jpg", "_manifest.json"]
+    assert pushed(fake) == ["MH_1022_03.jpg"]  # номер уже был в манифесте — манифест не меняется
     assert (again.done, again.skipped) == (1, 2)
 
 
@@ -410,7 +412,8 @@ def test_known_source_not_downloaded_keeps_its_manifest_entry(base, fake, drive,
 
 
 def test_upload_batch_partly_failed_manifest_has_only_landed_rerun_without_duplicates(base, fake, drive, workdir, listing):
-    """Пачка параллельная: упасть может и ранний файл при залитых поздних — в манифест только залитые."""
+    """Пачка параллельная: упасть может и ранний файл при залитых поздних. Номера всех отрендеренных
+    остаются в манифесте; повторный прогон пересоздаёт ровно _01 под тем же именем, без дыр и _04."""
     photos = make_car(base)
     for i in range(3):
         make_jpeg(photos / f"p{i}.jpg", datetime(2026, 9, 1 + i), color=(10 * i, 50, 90))
@@ -419,14 +422,16 @@ def test_upload_batch_partly_failed_manifest_has_only_landed_rerun_without_dupli
         job.run("MH_1022", listing, drive, workdir, None)
     out = photos / "На выгрузку"
     manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
-    assert sorted(f["out"] for f in manifest["files"]) == ["MH_1022_02.jpg", "MH_1022_03.jpg"]
-    assert list(workdir.iterdir()) == []
+    assert {f["out"]: f["src"] for f in manifest["files"]} == \
+        {"MH_1022_01.jpg": "p0.jpg", "MH_1022_02.jpg": "p1.jpg", "MH_1022_03.jpg": "p2.jpg"}
+    assert not (out / "MH_1022_01.jpg").exists() and list(workdir.iterdir()) == []
     fake.calls.clear()
     again = job.run("MH_1022", listing, drive, workdir, None)
     assert [n for n in pulled(fake) if n != "_manifest.json"] == ["p0.jpg"]
+    assert [n for n in pushed(fake) if n != "_manifest.json"] == ["MH_1022_01.jpg"]
     assert (again.done, again.skipped, again.failed) == (1, 2, [])
     assert sorted(p.name for p in out.iterdir()) == [
-        "MH_1022_02.jpg", "MH_1022_03.jpg", "MH_1022_04.jpg", "_manifest.json"]
+        "MH_1022_01.jpg", "MH_1022_02.jpg", "MH_1022_03.jpg", "_manifest.json"]
 
 
 def test_upload_batch_failed_rerender_keeps_old_entry(base, fake, drive, workdir, listing):
@@ -443,3 +448,17 @@ def test_upload_batch_failed_rerender_keeps_old_entry(base, fake, drive, workdir
         job.run("MH_1022", sharper, drive, workdir, None)
     assert json.loads((out / "_manifest.json").read_text(encoding="utf-8"))["files"] == old["files"]
     assert job.run("MH_1022", sharper, drive, workdir, None).done == 1
+
+
+def test_space_check_counts_outputs_waiting_for_upload(base, fake, drive, workdir, listing, monkeypatch):
+    """К скачиванию ×1.2 добавляется оценка JPEG до пачки заливки: 8 МБ на рендер listing."""
+    photos = make_car(base)
+    make_jpeg(photos / "a.jpg", datetime(2026, 9, 1))
+    size = (photos / "a.jpg").stat().st_size
+    usage = shutil.disk_usage(workdir)
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: usage._replace(free=int(size * 1.3) + 7_000_000))
+    with pytest.raises(job.NoSpace):
+        job.run("MH_1022", listing, drive, workdir, None)
+    assert pulled(fake) == []
+    monkeypatch.setattr(shutil, "disk_usage", lambda p: usage._replace(free=int(size * 1.3) + 9_000_000))
+    assert job.run("MH_1022", listing, drive, workdir, None).done == 1

@@ -4,7 +4,7 @@
 манифест → план → проверка места в tmp → скачать только нужное (одной пачкой `Drive.pull_many`) →
 конвертировать → залить JPEG одной пачкой (`Drive.push_many`) → последним `_manifest.json` → отчёт.
 Число вызовов rclone на прогон не зависит от числа файлов. Сбой пачки скачивания на части файлов —
-они в «Ошибках»; сбой пачки заливки — в манифест идут только реально легшие (листинг с хэшем). Папка задачи в `workdir` удаляется всегда.
+они в «Ошибках»; сбой пачки заливки — номера всех отрендеренных остаются в манифесте, незалитые пересоздаются. Папка задачи в `workdir` удаляется всегда.
 
 Каждая ошибка, которую должен увидеть партнёр, — `JobError` с готовым текстом `.user_text`
 (по-русски, без трейсбэков). Нет исходников — не ошибка, а `Report(status="empty")`.
@@ -34,6 +34,9 @@ from .store import (  # noqa: F401 — ошибки задачи остаютс�
 log = logging.getLogger(__name__)
 
 SPACE_RESERVE = 1.2  # скачиваемое + 20%
+# оценка JPEG в tmp до пачки заливки, байт на один рендер варианта
+OUTPUT_ESTIMATE = {"listing": 8_000_000, "full": 12_000_000}
+OUTPUT_ESTIMATE_DEFAULT = 12_000_000
 DOWNLOAD_FAILED = "не скачался с Drive, запусти /fotos ещё раз"
 
 Progress = Callable[[int, int], None]
@@ -158,7 +161,8 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
     no_hash = [f for f in remote.values() if not f.sha256]
     preview = Manifest(code, copy.deepcopy(manifest.files)).plan(hashed, variants, existing)
     need = {f.name for f in no_hash} | {i.source.name for i in preview.to_render}
-    _check_space(code, tmp, sum(remote[n].size for n in need))
+    outputs_size = sum(OUTPUT_ESTIMATE.get(i.variant.name, OUTPUT_ESTIMATE_DEFAULT) for i in preview.to_render)
+    _check_space(code, tmp, sum(remote[n].size for n in need), outputs_size)
 
     in_dir, out_local = tmp / "in", tmp / "out"
     out_local.mkdir(parents=True)
@@ -241,12 +245,11 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
         try:
             drive.push_many(out_local, names, out_dir)  # все JPEG — одной пачкой
         except DriveError:
-            # в манифест — только то, что реально легло (листинг + хэш), остальное как было
+            # номера отрендеренных — в манифест; что не легло, пересоздастся (листинг + хэш)
             try:
-                landed = _keep_uploaded(manifest, before, ex.done, out_local,
-                                        {f.name: f.sha256 for f in drive.list_files(out_dir)})
-                if landed:
-                    push_manifest()
+                _keep_uploaded(manifest, before, ex.done, out_local,
+                               {f.name: f.sha256 for f in drive.list_files(out_dir)})
+                push_manifest()
             except DriveError:
                 log.warning("%s: манифест после сбоя заливки не залит", code)
             raise
@@ -265,24 +268,24 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
 
 
 def _keep_uploaded(manifest: Manifest, before: list[dict], done: list[RenderItem],
-                   out_local: Path, remote: dict[str, str | None]) -> int:
-    """После сбоя пачки заливки: выход, чьего файла с тем же хэшем нет в «На выгрузку», убирается из
-    манифеста (прежняя запись, если была, возвращается) — следующий прогон его переделает."""
+                   out_local: Path, remote: dict[str, str | None]) -> None:
+    """После сбоя пачки заливки номера всех отрендеренных остаются в манифесте (без дыр): незалитого
+    файла нет в «На выгрузку» — следующий прогон пересоздаст его под тем же именем. Исключение —
+    пересчёт под тем же именем, когда на Drive остался старый файл: возвращается прежняя запись,
+    иначе старый файл сошёл бы за свежий."""
     old = {(f["sha256"], f["variant"]): f for f in before}
-    landed = 0
     for item in done:
-        if remote.get(item.out_name) == sha256_file(out_local / item.out_name):
-            landed += 1
-            continue
+        name = item.out_name
+        if name not in remote or remote[name] == sha256_file(out_local / name):
+            continue  # не лёг вовсе (пересоздастся) или лёг
         key = (item.source.sha256, item.variant.name)
-        manifest.files = [f for f in manifest.files if (f["sha256"], f["variant"]) != key]
         if key in old:
+            manifest.files = [f for f in manifest.files if (f["sha256"], f["variant"]) != key]
             manifest.files.append(copy.deepcopy(old[key]))
-    return landed
 
 
-def _check_space(code: str, tmp: Path, download: int) -> None:
-    need = download * SPACE_RESERVE
+def _check_space(code: str, tmp: Path, download: int, outputs: int = 0) -> None:
+    need = download * SPACE_RESERVE + outputs  # исходники + JPEG, ждущие пачки заливки
     free = shutil.disk_usage(tmp).free
     if need > free:
         raise NoSpace(
