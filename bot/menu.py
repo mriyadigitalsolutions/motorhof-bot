@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Union
 
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
@@ -260,6 +261,18 @@ async def call(handler: Handler, ctx: Context) -> str:
 
 # ---------- aiogram ----------
 
+async def edit(message: Message, text: str, markup: InlineKeyboardMarkup | None) -> Message:
+    """Экран на месте сообщения. Повторное нажатие той же кнопки (текст не изменился) —
+    не ошибка: Telegram отвечает «message is not modified», экран и так нужный."""
+    try:
+        result = await message.edit_text(text, reply_markup=markup)
+    except TelegramBadRequest as e:
+        if "message is not modified" not in str(e):
+            raise
+        return message
+    return result if isinstance(result, Message) else message
+
+
 async def show(message: Message, menu: Menu) -> None:
     """Главное меню новым сообщением (/start, /menu, нераспознанный текст в личке)."""
     screen = menu.screen(ROOT)
@@ -279,13 +292,13 @@ def make_router(menu: Menu, dialogs) -> Router:
             return
         await callback.answer()
         if press.kind == "screen":
-            await message.edit_text(press.screen.text, reply_markup=press.screen.markup())
+            await edit(message, press.screen.text, press.screen.markup())
             return
         ctx = context(callback.from_user, message.chat.id)
         if press.kind == "dialog":
             await dialogs.start(press.node.dialog, message, state, callback.from_user, edit=True)
             return
         text = await call(press.node.handler, ctx)
-        await message.edit_text(text)
+        await edit(message, text, None)
 
     return router

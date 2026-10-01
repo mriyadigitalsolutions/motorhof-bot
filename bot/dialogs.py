@@ -24,7 +24,7 @@ from aiogram.types import CallbackQuery, Message
 
 from core.dialog import PREFIX, STALE, Dialog, Engine, Outcome
 
-from .menu import context, keyboard
+from .menu import context, edit, keyboard
 
 log = logging.getLogger(__name__)
 
@@ -109,8 +109,7 @@ class Dialogs:
         return router
 
 
-async def _show(message: Message, text: str, markup, edit: bool) -> Message:
-    if edit:
-        result = await message.edit_text(text, reply_markup=markup)
-        return result if isinstance(result, Message) else message
+async def _show(message: Message, text: str, markup, edit_: bool) -> Message:
+    if edit_:
+        return await edit(message, text, markup)
     return await message.answer(text, reply_markup=markup)

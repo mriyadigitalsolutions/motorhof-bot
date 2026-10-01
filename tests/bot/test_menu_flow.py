@@ -239,3 +239,24 @@ async def test_real_main_menu_has_crm_inactive_and_drive(tmp_path):
         assert screens(tg)[-1] == ("Google Drive", ["Форматировать фото", "Назад"])
     finally:
         app.db.close()
+
+
+async def test_same_button_twice_is_not_an_error(app, tg):
+    from aiogram.exceptions import TelegramBadRequest
+    from aiogram.methods import EditMessageText as Edit
+
+    anna = Chat_(app, tg, ANNA)
+    await anna.say("/menu")
+    await anna.press("m:menu:open:demo")
+    original = type(tg).__call__
+
+    async def not_modified(self, method, request_timeout=None):
+        if isinstance(method, Edit):
+            raise TelegramBadRequest(method, "Bad Request: message is not modified")
+        return await original(self, method, request_timeout)
+
+    type(tg).__call__ = not_modified
+    try:
+        await anna.press("m:menu:open:demo")  # без исключения из обработчика
+    finally:
+        type(tg).__call__ = original
