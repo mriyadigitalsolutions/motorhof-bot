@@ -5,9 +5,9 @@
 по паре chat_id + user_id. Движок только решает, что показать дальше (`Outcome`), сам ничего
 не отправляет и в очередь не ставит: это делает бот, вызывая `Dialog.finish`.
 
-Кнопки диалога — callback_data `m:dlg:<действие>:<аргумент>`:
-  pick:<шаг>.<номер варианта>  выбор на шаге (номер шага отсекает кнопки прошлых экранов),
-  back:  на шаг назад,  cancel:  отмена,  run:  «Выполнить» на экране подтверждения.
+Кнопки диалога — нижняя клавиатура Telegram: нажатие приходит обычным текстом с подписью.
+`Engine.text` узнаёт служебные подписи («Назад» — шаг назад, «Отмена», «Выполнить» на экране
+подтверждения) и подписи вариантов текущего шага, остальное — свободный текст через validate.
 """
 from __future__ import annotations
 
@@ -16,7 +16,6 @@ from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Sequence, Union
 
 TIMEOUT = timedelta(minutes=10)
-PREFIX = "m:dlg:"
 
 CANCEL_LABEL = "Отмена"
 BACK_LABEL = "Назад"
@@ -27,7 +26,11 @@ STALE = "Этот диалог уже закрыт"
 CONFIRM_TITLE = "Что будет сделано:"
 
 Values = dict[str, Any]
-Button = tuple[str, str]  # (подпись, callback_data)
+
+
+def normalize_label(text: str | None) -> str:
+    """Единое правило сравнения текста с подписью кнопки (меню и диалог): без пробелов по краям."""
+    return (text or "").strip()
 
 
 class Invalid(Exception):
@@ -54,7 +57,7 @@ class Context:
 
 @dataclass(frozen=True)
 class Step:
-    """Один вопрос на экран. Ответ — кнопкой из choices или текстом (если задан validate).
+    """Один вопрос на экран. Ответ — подписью кнопки из choices или текстом (если задан validate).
 
     validate(text, values) возвращает значение шага или бросает Invalid. Без validate
     свободный текст не принимается — только кнопки.
@@ -76,7 +79,7 @@ Finish = Callable[[Values, Context], Union[str, Awaitable[str]]]
 
 @dataclass(frozen=True)
 class Dialog:
-    """id — латиница/цифры/подчёркивание (уходит в состояние, не в callback_data).
+    """id — латиница/цифры/подчёркивание (уходит в состояние FSM).
     confirm(values) — текст экрана «Что будет сделано»; None — без подтверждения.
     finish(values, ctx) — действие после «Выполнить»; возвращает ответ партнёру."""
     id: str
@@ -96,13 +99,13 @@ class Dialog:
 class Outcome:
     """Что сделать боту.
 
-    kind: ask — показать text и buttons; finish — вызвать
+    kind: ask — показать text и клавиатуру keyboard (подписи по рядам); finish — вызвать
     Dialog.finish(values) диалога `dialog`; closed — сессию сбросить и показать text (отмена, таймаут, ошибка).
     keep — сессию сохранить (ask) или сбросить (finish, closed).
     """
     kind: str
     text: str = ""
-    buttons: list[list[Button]] = field(default_factory=list)
+    keyboard: list[list[str]] = field(default_factory=list)
     values: Values = field(default_factory=dict)
     session: dict | None = None
     dialog: str = ""
@@ -110,10 +113,6 @@ class Outcome:
     @property
     def keep(self) -> bool:
         return self.kind == "ask"
-
-
-def is_dialog_callback(data: str | None) -> bool:
-    return bool(data) and data.startswith(PREFIX)
 
 
 class Engine:
@@ -148,52 +147,35 @@ class Engine:
             return True
 
     def text(self, session: dict | None, text: str, now: datetime) -> Outcome:
-        """Свободный текст в диалоге: ответ на текущий шаг."""
+        """Ответ партнёра в диалоге: подпись кнопки («Назад», «Отмена», «Выполнить», вариант
+        текущего шага) или свободный текст на шаг с validate. Подпись сравнивается первой:
+        слово, совпадающее с кнопкой, срабатывает как кнопка."""
         d, closed = self._active(session, now)
         if closed:
             return closed
+        label = normalize_label(text)
         idx = session["step"]
-        if idx >= len(d.steps):  # экран подтверждения ждёт кнопку
+        if label == CANCEL_LABEL:
+            return Outcome("closed", CANCELLED)
+        if label == BACK_LABEL:
+            if idx == 0:
+                return Outcome("closed", CANCELLED)
+            return self._show(d, self._touch(dict(session, step=idx - 1), now))
+        if idx >= len(d.steps):  # экран подтверждения ждёт «Выполнить»
+            if label == RUN_LABEL:
+                return Outcome("finish", values=dict(session["values"]), dialog=d.id)
             return self._show(d, session, note="Нажми «Выполнить» или «Отмена».")
         step = d.steps[idx]
+        for choice in step.options(session["values"]):
+            if choice.label == label:
+                return self._advance(d, session, step.name, choice.value, now)
         if step.validate is None:
             return self._show(d, session, note="Выбери вариант кнопкой.")
         try:
-            value = step.validate(text.strip(), dict(session["values"]))
+            value = step.validate(label, dict(session["values"]))
         except Invalid as e:
             return self._show(d, session, note=e.text)
         return self._advance(d, session, step.name, value, now)
-
-    def button(self, session: dict | None, data: str, now: datetime) -> Outcome:
-        """Нажатие кнопки m:dlg:… в диалоге."""
-        _, _, action, arg = (data.split(":", 3) + ["", "", "", ""])[:4]
-        if action == "cancel":
-            return Outcome("closed", CANCELLED)
-        d, closed = self._active(session, now)
-        if closed:
-            return closed
-        idx = session["step"]
-        if action == "back":
-            if idx == 0:
-                return Outcome("closed", CANCELLED)
-            session = dict(session, step=idx - 1)
-            return self._show(d, self._touch(session, now))
-        if action == "run":
-            if idx < len(d.steps):
-                return Outcome("ask", STALE, session=session)
-            return Outcome("finish", values=dict(session["values"]), dialog=d.id)
-        if action == "pick":
-            step_no, _, choice_no = arg.partition(".")
-            if step_no != str(idx) or idx >= len(d.steps):
-                return Outcome("ask", STALE, session=session)
-            step = d.steps[idx]
-            options = step.options(session["values"])
-            try:
-                choice = options[int(choice_no)]
-            except (ValueError, IndexError):
-                return Outcome("ask", STALE, session=session)
-            return self._advance(d, session, step.name, choice.value, now)
-        return Outcome("ask", STALE, session=session)
 
     # --- внутреннее ---------------------------------------------------------
     def _active(self, session: dict | None, now: datetime) -> tuple[Dialog | None, Outcome | None]:
@@ -219,14 +201,14 @@ class Engine:
     def _show(self, d: Dialog, session: dict, note: str | None = None) -> Outcome:
         idx = session["step"]
         values = session["values"]
-        nav = [(BACK_LABEL, PREFIX + "back:"), (CANCEL_LABEL, PREFIX + "cancel:")]
+        nav = [BACK_LABEL, CANCEL_LABEL]
         if idx >= len(d.steps):
             text = CONFIRM_TITLE + "\n" + d.confirm(values)
-            rows = [[(RUN_LABEL, PREFIX + "run:")], nav]
+            rows = [[RUN_LABEL], nav]
         else:
             step = d.steps[idx]
             text = step.text(values)
-            rows = [[(c.label, f"{PREFIX}pick:{idx}.{n}")] for n, c in enumerate(step.options(values))]
+            rows = [[c.label] for c in step.options(values)]
             rows.append(nav)
         if note:
             text = f"{note}\n\n{text}"

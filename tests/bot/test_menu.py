@@ -1,7 +1,8 @@
-"""Реестр меню: экраны из модулей, parent, порядок и активность из конфига, callback_data."""
+"""Реестр меню: экраны из модулей, parent, порядок и активность из конфига, поиск кнопки по подписи."""
 import pytest
+from aiogram.types import ReplyKeyboardMarkup
 
-from bot.menu import DISABLED, ROOT, UNKNOWN, Menu
+from bot.menu import DISABLED, ROOT, Menu, reply_keyboard
 from core.dialog import Dialog, Step
 
 
@@ -22,53 +23,64 @@ def tree():
     return menu
 
 
-def rows(screen):
-    return [[label for label, _ in row] for row in screen.rows]
-
-
 def test_main_menu_has_two_module_buttons_in_config_order():
     screen = tree().screen(ROOT)
     assert screen.text == "Главное меню"
-    assert rows(screen) == [["CRM"], ["Google Drive"]]
-    assert [d for row in screen.rows for _, d in row] == ["m:menu:open:crm", "m:menu:open:drive"]
+    assert screen.rows == [["CRM"], ["Google Drive"]]
 
 
 def test_module_screen_shows_foreign_button_one_per_row_and_back():
     screen = tree().screen("drive")
     assert screen.text == "Google Drive"
-    assert rows(screen) == [["Форматировать фото"], ["Машины в наличии"], ["Назад"]]
-    assert screen.rows[0][0][1] == "m:photos:convert:"
-    assert screen.rows[-1][0][1] == "m:menu:open:root"
+    assert screen.rows == [["Форматировать фото"], ["Машины в наличии"], ["Назад"]]
 
 
-def test_press_routes_screens_actions_and_back():
+def test_reply_keyboard_is_persistent_resized_and_selective():
+    kb = reply_keyboard([["CRM"], ["Google Drive"]])
+    assert isinstance(kb, ReplyKeyboardMarkup)
+    assert [[b.text for b in row] for row in kb.keyboard] == [["CRM"], ["Google Drive"]]
+    assert kb.resize_keyboard and kb.is_persistent and kb.selective
+
+
+def test_press_label_routes_screens_actions_and_back():
     menu = tree()
-    assert menu.press("m:menu:open:drive").screen.text == "Google Drive"
-    assert menu.press("m:menu:open:root").screen.text == "Главное меню"
-    press = menu.press("m:photos:convert:")
-    assert press.kind == "dialog" and press.node.dialog.id == "d"
-    assert menu.press("m:drive:lager:").kind == "handler"
+    press = menu.press_label("Google Drive", None)
+    assert (press.kind, press.screen_id, press.screen.text) == ("screen", "drive", "Google Drive")
+    back = menu.press_label("Назад", "drive")
+    assert (back.kind, back.screen_id, back.screen.text) == ("screen", ROOT, "Главное меню")
+    press = menu.press_label("Форматировать фото", None)
+    assert press.kind == "dialog" and press.node.dialog.id == "d" and press.screen_id == "drive"
+    press = menu.press_label("Машины в наличии", ROOT)
+    assert press.kind == "handler" and press.screen_id == "drive"
 
 
-def test_disabled_module_answers_popup_and_keeps_screen():
-    menu = tree()
-    press = menu.press("m:menu:open:crm")
-    assert press.kind == "alert" and press.text == DISABLED and press.screen is None
+@pytest.mark.parametrize("current", [None, ROOT, "nope"])
+def test_back_without_known_screen_goes_to_main_menu(current):
+    press = tree().press_label("Назад", current)
+    assert (press.kind, press.screen_id) == ("screen", ROOT)
+
+
+def test_disabled_module_answers_notice_without_screen():
+    press = tree().press_label("CRM", ROOT)
+    assert press.kind == "notice" and press.text == DISABLED and press.screen is None
 
 
 def test_buttons_inside_disabled_section_are_disabled_too():
     menu = tree()
     menu.configure({"drive": {"enabled": False}})
-    assert menu.press("m:photos:convert:").text == DISABLED
+    assert menu.press_label("Форматировать фото", None).text == DISABLED
     menu.configure({"photos:convert": {"enabled": False}})
-    assert menu.press("m:photos:convert:").text == DISABLED
-    assert menu.press("m:drive:lager:").kind == "handler"
+    assert menu.press_label("Форматировать фото", None).text == DISABLED
+    assert menu.press_label("Машины в наличии", None).kind == "handler"
 
 
-@pytest.mark.parametrize("data", ["m:menu:open:nope", "m:photos:nope:", "x:y", "", None, "m:menu:zap:drive"])
-def test_unknown_or_stale_buttons(data):
-    press = tree().press(data)
-    assert press.kind == "alert" and press.text == UNKNOWN
+@pytest.mark.parametrize("label", ["Привет", "", "google drive"])
+def test_unknown_label(label):
+    assert tree().press_label(label, None).kind == "none"
+
+
+def test_labels_are_all_buttons_and_back():
+    assert tree().labels() == {"CRM", "Google Drive", "Форматировать фото", "Машины в наличии", "Назад"}
 
 
 def test_empty_section_says_so():
@@ -77,7 +89,22 @@ def test_empty_section_says_so():
     menu.validate()
     screen = menu.screen("drive")
     assert screen.text == "Google Drive\n\nЗдесь пока ничего нет"
-    assert rows(screen) == [["Назад"]]
+    assert screen.rows == [["Назад"]]
+
+
+def test_duplicate_label_stops_start():
+    menu = tree()
+    menu.scope("other").section("other", "CRM")
+    with pytest.raises(ValueError, match="CRM"):
+        menu.validate()
+
+
+@pytest.mark.parametrize("label", ["Назад", "Отмена", "Выполнить"])
+def test_service_label_on_menu_button_stops_start(label):
+    menu = tree()
+    menu.scope("other").action("x", label, parent="drive", handler=lambda c: "")
+    with pytest.raises(ValueError, match=label):
+        menu.validate()
 
 
 def test_typo_in_parent_stops_start():
@@ -117,12 +144,3 @@ def test_declaration_errors():
         menu.scope("other").section("drive", "Дубль")
     with pytest.raises(ValueError):
         menu.scope("menu")
-    with pytest.raises(ValueError):
-        menu.scope("dlg")
-
-
-def test_callback_data_fits_64_bytes():
-    menu = Menu()
-    m = menu.scope("a" * 20)
-    node = m.action("b" * 20, "Длинная", parent=ROOT, handler=lambda c: "")
-    assert len(node.callback.encode()) <= 64

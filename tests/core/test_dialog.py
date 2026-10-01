@@ -1,10 +1,9 @@
-"""Движок пошаговых диалогов: шаги, проверка ввода, кнопки, «Назад», «Отмена», таймаут."""
+"""Движок пошаговых диалогов: шаги, проверка ввода, кнопки по подписи, «Назад», «Отмена», таймаут."""
 from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from core.dialog import (CANCELLED, EXPIRED, STALE, Choice, Dialog, Engine, Invalid, Step,
-                         is_dialog_callback)
+from core.dialog import CANCELLED, EXPIRED, STALE, Choice, Dialog, Engine, Invalid, Step
 
 T0 = datetime(2026, 10, 1, 9, 0, tzinfo=timezone.utc)
 
@@ -27,79 +26,86 @@ def make_dialog(confirm=True):
     )
 
 
-def callbacks(outcome):
-    return [data for row in outcome.buttons for _, data in row]
-
-
 @pytest.fixture
 def engine():
     return Engine()
 
 
-def test_walk_through_with_buttons_text_and_confirm(engine):
+def test_walk_through_with_labels_text_and_confirm(engine):
     out = engine.start(make_dialog(), T0)
     assert out.kind == "ask" and out.text == "Тип машины?"
-    assert callbacks(out) == ["m:dlg:pick:0.0", "m:dlg:pick:0.1", "m:dlg:back:", "m:dlg:cancel:"]
-    assert all(is_dialog_callback(c) and len(c.encode()) <= 64 for c in callbacks(out))
+    assert out.keyboard == [["MH"], ["KO"], ["Назад", "Отмена"]]
 
-    out = engine.button(out.session, "m:dlg:pick:0.1", T0)
-    assert out.text == "Номер KO?"
+    out = engine.text(out.session, "KO", T0)
+    assert out.text == "Номер KO?" and out.keyboard == [["Назад", "Отмена"]]
     out = engine.text(out.session, " 2001 ", T0)
     assert out.kind == "ask" and out.text == "Что будет сделано:\nПапка KO_2001"
-    assert callbacks(out)[0] == "m:dlg:run:"
+    assert out.keyboard == [["Выполнить"], ["Назад", "Отмена"]]
 
-    done = engine.button(out.session, "m:dlg:run:", T0)
+    done = engine.text(out.session, "Выполнить", T0)
     assert done.kind == "finish" and not done.keep
     assert done.values == {"kind": "KO", "number": 2001}
 
 
 def test_without_confirm_finishes_after_last_step(engine):
     out = engine.start(make_dialog(confirm=False), T0)
-    out = engine.button(out.session, "m:dlg:pick:0.0", T0)
+    out = engine.text(out.session, "MH", T0)
     out = engine.text(out.session, "1042", T0)
     assert out.kind == "finish" and out.values == {"kind": "MH", "number": 1042}
 
 
 def test_invalid_text_repeats_step_with_hint(engine):
     out = engine.start(make_dialog(), T0)
-    out = engine.button(out.session, "m:dlg:pick:0.0", T0)
+    out = engine.text(out.session, "MH", T0)
     again = engine.text(out.session, "abc", T0)
     assert again.kind == "ask" and again.text == "Только цифры\n\nНомер MH?"
+    assert again.keyboard == [["Назад", "Отмена"]]
     assert again.session["step"] == 1
 
 
 def test_text_on_button_only_step_asks_for_button(engine):
     out = engine.start(make_dialog(), T0)
-    again = engine.text(out.session, "MH", T0)
-    assert again.kind == "ask" and again.text.startswith("Выбери вариант кнопкой.")
+    again = engine.text(out.session, "Mazda", T0)
+    assert again.kind == "ask" and again.text == "Выбери вариант кнопкой.\n\nТип машины?"
     assert again.session["step"] == 0
 
 
-def test_back_and_cancel(engine):
+def test_confirm_screen_wants_run_or_cancel(engine):
     out = engine.start(make_dialog(), T0)
-    second = engine.button(out.session, "m:dlg:pick:0.0", T0)
-    back = engine.button(second.session, "m:dlg:back:", T0)
+    out = engine.text(out.session, "MH", T0)
+    out = engine.text(out.session, "1", T0)
+    again = engine.text(out.session, "да", T0)
+    assert again.kind == "ask" and again.text.startswith("Нажми «Выполнить» или «Отмена».")
+
+
+def test_run_label_on_a_step_is_not_a_finish(engine):
+    out = engine.start(make_dialog(), T0)
+    again = engine.text(out.session, "Выполнить", T0)
+    assert again.kind == "ask" and again.session["step"] == 0
+
+
+def test_back_and_cancel_labels(engine):
+    out = engine.start(make_dialog(), T0)
+    second = engine.text(out.session, "MH", T0)
+    back = engine.text(second.session, "Назад", T0)
     assert back.text == "Тип машины?" and back.session["step"] == 0
-    first_back = engine.button(back.session, "m:dlg:back:", T0)
+    first_back = engine.text(back.session, "Назад", T0)
     assert first_back.kind == "closed" and first_back.text == CANCELLED
-    cancel = engine.button(second.session, "m:dlg:cancel:", T0)
+    cancel = engine.text(second.session, "Отмена", T0)
     assert cancel.kind == "closed" and cancel.text == CANCELLED and not cancel.keep
 
 
-def test_old_buttons_are_ignored(engine):
+def test_label_like_word_on_text_step_works_as_button(engine):
+    """Риск, названный заказчику: слово, совпадающее с кнопкой, срабатывает как кнопка."""
     out = engine.start(make_dialog(), T0)
-    second = engine.button(out.session, "m:dlg:pick:0.0", T0)
-    stale = engine.button(second.session, "m:dlg:pick:0.1", T0)  # кнопка прошлого экрана
-    assert stale.text == STALE and stale.session["values"] == {"kind": "MH"}
-    early_run = engine.button(second.session, "m:dlg:run:", T0)
-    assert early_run.text == STALE and early_run.kind == "ask"
-    assert engine.button(None, "m:dlg:pick:0.0", T0).kind == "closed"
+    out = engine.text(out.session, "MH", T0)
+    assert engine.text(out.session, "Отмена", T0).kind == "closed"
 
 
 def test_timeout_ten_minutes_since_last_answer(engine):
     out = engine.start(make_dialog(), T0)
     later = T0 + timedelta(minutes=9)
-    out = engine.button(out.session, "m:dlg:pick:0.0", later)  # ответ продлевает срок
+    out = engine.text(out.session, "MH", later)  # ответ продлевает срок
     assert not engine.expired(out.session, later + timedelta(minutes=9, seconds=59))
     late = later + timedelta(minutes=10)
     assert engine.expired(out.session, late)
@@ -107,10 +113,10 @@ def test_timeout_ten_minutes_since_last_answer(engine):
     assert closed.kind == "closed" and closed.text == EXPIRED
 
 
-def test_unknown_dialog_in_session_closes(engine):
+def test_no_session_or_unknown_dialog_closes(engine):
     out = engine.start(make_dialog(), T0)
-    other = Engine()
-    assert other.text(out.session, "1", T0).text == STALE
+    assert Engine().text(out.session, "1", T0).text == STALE
+    assert engine.text(None, "MH", T0).kind == "closed"
 
 
 def test_dialog_definition_checks():

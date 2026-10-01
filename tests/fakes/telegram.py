@@ -40,7 +40,7 @@ class ChatBot(FakeBot):
         from datetime import datetime
 
         from aiogram.methods import EditMessageText, SendMessage
-        from aiogram.types import Chat, Message
+        from aiogram.types import Chat, InlineKeyboardMarkup, Message
 
         self.methods.append(method)
         if isinstance(method, (SendMessage, EditMessageText)):
@@ -52,7 +52,8 @@ class ChatBot(FakeBot):
             chat_id = method.chat_id
             self._last[chat_id] = message_id
             chat = Chat(id=chat_id, type="private" if chat_id > 0 else "supergroup")
+            # у Message в ответе Telegram бывает только inline-клавиатура
+            markup = method.reply_markup if isinstance(method.reply_markup, InlineKeyboardMarkup) else None
             return Message(message_id=message_id, date=datetime(2026, 10, 1), chat=chat,
-                           from_user=self._me, text=method.text,
-                           reply_markup=method.reply_markup).as_(self)
+                           from_user=self._me, text=method.text, reply_markup=markup).as_(self)
         return True
