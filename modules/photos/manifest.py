@@ -8,6 +8,8 @@
 """
 from __future__ import annotations
 
+import copy
+
 import hashlib
 import json
 import os
@@ -176,6 +178,12 @@ class Manifest:
                          and name in existing_outputs)
                 (result.skipped if fresh else result.to_render).append(item)
         return result
+
+    def restore(self, entry: dict) -> None:
+        """Вернуть прежнюю запись выхода (тот же sha256 и вариант) вместо текущей — копией."""
+        key = (entry["sha256"], entry["variant"])
+        self.files = [f for f in self.files if (f["sha256"], f["variant"]) != key]
+        self.files.append(copy.deepcopy(entry))
 
     def apply(self, results: Iterable[RenderItem]) -> None:
         """Вносит успешно отрендеренные выходы."""

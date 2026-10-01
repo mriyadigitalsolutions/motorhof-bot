@@ -170,6 +170,7 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
     missing = set(drive.pull_many(src_dir, sorted(need), in_dir, size=sum(remote[n].size for n in need)))
     local: dict[str, Path] = {n: in_dir / n for n in need if n not in missing}
     known = {f["sha256"] for f in manifest.files}
+    by_src = {f["src"]: f["sha256"] for f in manifest.files if not f.get("src_deleted", False)}
     unavailable: dict[str, str] = {}  # исходник с номером в манифесте, не скачался → ошибка в рендере
 
     def fetch(name: str) -> Path:
@@ -184,6 +185,7 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
     for f in sorted(remote.values(), key=lambda f: f.name):
         sha, taken = f.sha256, None
         if f.name in missing:
+            sha = sha or by_src.get(f.name)  # без хэша Drive — по имени из манифеста, чтобы не осиротить
             if sha in known:
                 # номер уже закреплён: execute отметит ошибку, запись в манифесте не тронет
                 unavailable[f.name] = DOWNLOAD_FAILED
@@ -237,6 +239,9 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
 
     ex = manifest.execute(sources, variants, existing, render, on_plan=on_plan)
     errors.extend(ex.errors)
+    # не скачанный исходник, до рендера которого не дошло (без хэша Drive качался только ради хэша)
+    reported = {n for n, _ in ex.errors}
+    errors.extend((n, why) for n, why in unavailable.items() if n not in reported)
     names = list(dict.fromkeys(i.out_name for i in ex.done))
     if names:
         if not out_exists:  # «На выгрузку» — только когда есть что залить
@@ -280,8 +285,7 @@ def _keep_uploaded(manifest: Manifest, before: list[dict], done: list[RenderItem
             continue  # не лёг вовсе (пересоздастся) или лёг
         key = (item.source.sha256, item.variant.name)
         if key in old:
-            manifest.files = [f for f in manifest.files if (f["sha256"], f["variant"]) != key]
-            manifest.files.append(copy.deepcopy(old[key]))
+            manifest.restore(old[key])
 
 
 def _check_space(code: str, tmp: Path, download: int, outputs: int = 0) -> None:

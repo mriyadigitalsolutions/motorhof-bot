@@ -411,7 +411,7 @@ def test_known_source_not_downloaded_keeps_its_manifest_entry(base, fake, drive,
     assert sorted(p.name for p in out.iterdir()) == ["MH_1022_01.jpg", "MH_1022_02.jpg", "_manifest.json"]
 
 
-def test_upload_batch_partly_failed_manifest_has_only_landed_rerun_without_duplicates(base, fake, drive, workdir, listing):
+def test_upload_batch_partly_failed_keeps_all_rendered_numbers_rerun_recreates_same_name(base, fake, drive, workdir, listing):
     """Пачка параллельная: упасть может и ранний файл при залитых поздних. Номера всех отрендеренных
     остаются в манифесте; повторный прогон пересоздаёт ровно _01 под тем же именем, без дыр и _04."""
     photos = make_car(base)
@@ -462,3 +462,19 @@ def test_space_check_counts_outputs_waiting_for_upload(base, fake, drive, workdi
     assert pulled(fake) == []
     monkeypatch.setattr(shutil, "disk_usage", lambda p: usage._replace(free=int(size * 1.3) + 9_000_000))
     assert job.run("MH_1022", listing, drive, workdir, None).done == 1
+
+
+def test_source_without_drive_hash_not_downloaded_is_error_not_orphan(base, fake, drive, workdir, listing):
+    photos = make_car(base)
+    for i in range(2):
+        make_jpeg(photos / f"p{i}.jpg", datetime(2026, 9, 1 + i), color=(10 * i, 50, 90))
+    job.run("MH_1022", listing, drive, workdir, None)
+    out = photos / "На выгрузку"
+    fake.no_hash = {"p0.jpg", "p1.jpg"}
+    fake.fail_files("p0.jpg", times=1)
+    report = job.run("MH_1022", listing, drive, workdir, None)
+    assert report.failed == [("p0.jpg", "не скачался с Drive, запусти /fotos ещё раз")]
+    assert report.orphans == [] and "осиротевших" not in report.text()
+    manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+    assert {f["out"]: (f["src"], f["orphan"]) for f in manifest["files"]} == \
+        {"MH_1022_01.jpg": ("p0.jpg", False), "MH_1022_02.jpg": ("p1.jpg", False)}

@@ -1,7 +1,7 @@
 window.STATE =
 {
   "slug": "motorhof-bot-photos",
-  "dir": "2026-09-30-motorhof-bot-photos--wip",
+  "dir": "2026-09-30-motorhof-bot-photos",
   "title": "MOTORHOF: Telegram-бот, модуль photos",
   "mode": "interview",
   "depth": "deep",
@@ -11,8 +11,8 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-10-01T15:12:08+00:00",
-  "finishedAt": null,
+  "updatedAt": "2026-10-01T15:32:10+00:00",
+  "finishedAt": "2026-10-01T15:32:10+00:00",
   "stages": [
     {
       "id": "preflight",
@@ -47,25 +47,29 @@ window.STATE =
     },
     {
       "id": "build",
-      "status": "active",
+      "status": "done",
       "startedAt": "2026-09-30T21:12:54+00:00",
-      "note": "таски 14 и 15 параллельно"
+      "note": "таски 14 и 15 параллельно",
+      "finishedAt": "2026-10-01T15:32:10+00:00"
     },
     {
       "id": "review",
-      "status": "active",
+      "status": "done",
       "startedAt": "2026-09-30T21:21:04+00:00",
-      "note": "дополнение: таск 14 (скорость), D06 ждёт образец"
+      "note": "дополнение: таск 14 (скорость), D06 ждёт образец",
+      "finishedAt": "2026-10-01T15:32:10+00:00"
     },
     {
       "id": "final",
-      "status": "pending",
-      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)"
+      "status": "done",
+      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)",
+      "startedAt": "2026-10-01T15:32:10+00:00",
+      "finishedAt": "2026-10-01T15:32:10+00:00"
     }
   ],
   "requirements": {
     "total": 62,
-    "done": 60,
+    "done": 62,
     "inTicket": 0,
     "inSpec": 0,
     "placeholder": 0,
@@ -571,11 +575,16 @@ window.STATE =
         "modules/photos/job.py",
         "tests/"
       ],
-      "status": "in-progress",
+      "status": "done",
       "startedAt": "2026-10-01T15:10:09+00:00",
       "retries": 0,
-      "repairs": 0,
-      "handoffs": 0
+      "repairs": 2,
+      "handoffs": 0,
+      "finishedAt": "2026-10-01T15:32:10+00:00",
+      "tests": {
+        "passed": 360,
+        "failed": 0
+      }
     },
     {
       "id": "15",
@@ -593,16 +602,21 @@ window.STATE =
         "modules/photos/convert.py",
         "tests/photos/"
       ],
-      "status": "in-progress",
+      "status": "done",
       "startedAt": "2026-10-01T15:12:08+00:00",
       "retries": 0,
       "repairs": 0,
-      "handoffs": 0
+      "handoffs": 0,
+      "finishedAt": "2026-10-01T15:32:10+00:00",
+      "tests": {
+        "passed": 360,
+        "failed": 0
+      }
     }
   ],
   "singlePass": null,
   "tests": {
-    "passed": 320,
+    "passed": 360,
     "failed": 0,
     "skipped": 1
   },
@@ -662,7 +676,10 @@ window.STATE =
     "11 · full-вариант из DNG светлеет только при /fotos … full; выходы с удалённым DNG остаются тёмными",
     "12 · core/drive.py:199 — ветка _json для словаря (--stat) больше не нужна",
     "12 · drive.py:326 — IsDir по умолчанию True",
-    "12 · фейк: остаток --stat для файлов; тест bad-json folder_id проверяет другую ветку"
+    "12 · фейк: остаток --stat для файлов; тест bad-json folder_id проверяет другую ветку",
+    "14 · /status во время пачки заливки показывает total/total — фаза «заливка» не видна",
+    "14 · OUTPUT_ESTIMATE по имени варианта дублирует знание variants.yaml",
+    "15 · PNG/GIF/WebP под .jpg теперь UNREADABLE (раньше иногда читались)"
   ],
   "reviewers": {
     "manifestSpec": "abc0acae4069042f5",
