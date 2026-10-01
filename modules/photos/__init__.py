@@ -1,4 +1,5 @@
-"""Модуль photos: команда /fotos, задача "photos.convert" (полный цикл машины),
+"""Модуль photos: команда /fotos и кнопка «Форматировать фото» в экране Google Drive,
+задача "photos.convert" (полный цикл машины),
 перенумерация по дате (/fotos … заново, кнопки phr:*, задача "photos.renumber"),
 напоминание об удалении DNG (ночная проверка, кнопки ph:*, задача "photos.delete_dng")."""
 from __future__ import annotations
@@ -13,6 +14,7 @@ from core.queue import JobQueue
 from core.settings import Settings, load_settings
 
 from . import handlers
+from . import menu as menu_mod
 from .jobs import KIND_DELETE, KIND_RENUMBER
 from .reminders import Reminders
 from .renumber import Renumberer
@@ -21,10 +23,12 @@ MODULE = handlers.MODULE
 HELP = handlers.HELP
 
 def register(router: Router, queue: JobQueue, *, settings: Settings | None = None,
-             drive: Drive | None = None, workdir: Path | None = None, **_: object) -> Reminders:
+             drive: Drive | None = None, workdir: Path | None = None, menu=None,
+             **_: object) -> Reminders:
     """Подключает /fotos к router и тип задачи к очереди. Бот передаёт свой settings
     (через modules.register_all); без него — один load_settings() (запуск вне бота).
     drive и workdir по умолчанию из settings; секреты для redact — всегда из settings.
+    menu — меню бота (bot/menu.py): кнопка публикуется в экран drive (parent="drive").
     Возвращает сервис напоминаний об удалении DNG (его set_sender — отправка вне бота/в тестах)."""
     settings = settings or load_settings()
     drive = drive or Drive.from_settings(settings)
@@ -42,4 +46,6 @@ def register(router: Router, queue: JobQueue, *, settings: Settings | None = Non
     router.callback_query.register(handlers.make_buttons(service, renumber),
                                    F.data.startswith(handlers.BUTTON_PREFIXES))
     router.startup.register(handlers.make_startup(service))
+    if menu is not None:
+        menu_mod.publish(menu, queue)
     return service
