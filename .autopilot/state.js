@@ -1,7 +1,7 @@
 window.STATE =
 {
   "slug": "motorhof-bot-photos",
-  "dir": "2026-09-30-motorhof-bot-photos",
+  "dir": "2026-09-30-motorhof-bot-photos--wip",
   "title": "MOTORHOF: Telegram-бот, модуль photos",
   "mode": "interview",
   "depth": "deep",
@@ -11,8 +11,8 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-10-01T09:46:58+00:00",
-  "finishedAt": "2026-10-01T09:46:58+00:00",
+  "updatedAt": "2026-10-01T15:10:09+00:00",
+  "finishedAt": null,
   "stages": [
     {
       "id": "preflight",
@@ -47,28 +47,24 @@ window.STATE =
     },
     {
       "id": "build",
-      "status": "done",
+      "status": "active",
       "startedAt": "2026-09-30T21:12:54+00:00",
-      "note": "дополнение: таск 13 (OAuth-клиент)",
-      "finishedAt": "2026-10-01T09:46:58+00:00"
+      "note": "дополнение: таск 14 (скорость), D06 ждёт образец"
     },
     {
       "id": "review",
-      "status": "done",
+      "status": "active",
       "startedAt": "2026-09-30T21:21:04+00:00",
-      "note": "дополнение: таск 13 (OAuth-клиент)",
-      "finishedAt": "2026-10-01T09:46:58+00:00"
+      "note": "дополнение: таск 14 (скорость), D06 ждёт образец"
     },
     {
       "id": "final",
-      "status": "done",
-      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)",
-      "startedAt": "2026-10-01T09:46:58+00:00",
-      "finishedAt": "2026-10-01T09:46:58+00:00"
+      "status": "pending",
+      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)"
     }
   ],
   "requirements": {
-    "total": 60,
+    "total": 62,
     "done": 60,
     "inTicket": 0,
     "inSpec": 0,
@@ -557,6 +553,29 @@ window.STATE =
         "passed": 320,
         "failed": 0
       }
+    },
+    {
+      "id": "14",
+      "title": "Пакетное скачивание и заливка",
+      "requirements": [
+        "R09",
+        "R28",
+        "D05"
+      ],
+      "blockedBy": [
+        "13"
+      ],
+      "wave": 12,
+      "zone": [
+        "core/drive.py",
+        "modules/photos/job.py",
+        "tests/"
+      ],
+      "status": "in-progress",
+      "startedAt": "2026-10-01T15:10:09+00:00",
+      "retries": 0,
+      "repairs": 0,
+      "handoffs": 0
     }
   ],
   "singlePass": null,
