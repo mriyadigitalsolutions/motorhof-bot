@@ -178,7 +178,7 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
     for f in sorted(remote.values(), key=lambda f: f.name):
         sha, taken = f.sha256, None
         if f.name in missing:
-            if False:
+            if sha in known:
                 # номер уже закреплён: execute отметит ошибку, запись в манифесте не тронет
                 unavailable[f.name] = DOWNLOAD_FAILED
                 sources.append(Source(f.name, sha, None, _mtime(f.mtime)))
