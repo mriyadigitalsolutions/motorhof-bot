@@ -12,8 +12,11 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 import subprocess
+import tempfile
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Iterable, NamedTuple
@@ -35,6 +38,14 @@ _CAR_NAME = re.compile(r"^((?:MH|KO)_\d+)_")
 _CODE = re.compile(r"^(?:MH|KO)_\d+$")
 DEFAULT_TIMEOUT = 1800  # секунд на один вызов rclone
 _STDERR_TAIL = 5
+# Пачки (pull_many/push_many): один `rclone copy --files-from-raw` на все файлы, параллельно.
+# `--no-traverse` не ставим: на Drive он вместо одного листинга папки назначения ищет каждый файл
+# отдельным запросом — при десятках файлов это дороже, а не дешевле.
+TRANSFERS = 8
+BATCH_SECONDS_PER_FILE = 60        # таймаут пачки: запас на файл (авторизация, медленный старт)
+BATCH_MIN_BYTES_PER_SEC = 1_000_000  # и на объём при скорости не ниже 1 МБ/с; не меньше timeout
+
+log = logging.getLogger(__name__)
 
 
 class RunResult(NamedTuple):
@@ -179,13 +190,14 @@ class Drive:
             return str(Path(self.remote, self.root, *parts) if self.remote else Path(self.root, *parts))
         return f"{self.remote}:" + "/".join(_split(self.root) + parts)
 
-    def _run(self, *args: str) -> RunResult:
+    def _run(self, *args: str, timeout: float | None = None) -> RunResult:
         cmd = [self.rclone, *args]
+        timeout = self.timeout if timeout is None else timeout
         try:
-            return self.runner(cmd, timeout=self.timeout)
+            return self.runner(cmd, timeout=timeout)
         except subprocess.TimeoutExpired:
             raise DriveError(
-                f"rclone не ответил за {int(self.timeout)} с ({args[0]}). Проверь сеть и доступ к Drive, потом повтори."
+                f"rclone не ответил за {int(timeout)} с ({args[0]}). Проверь сеть и доступ к Drive, потом повтори."
             ) from None
 
     def _check(self, result: RunResult, what: str) -> RunResult:
@@ -348,6 +360,72 @@ class Drive:
         local.parent.mkdir(parents=True, exist_ok=True)
         self._check(self._run("copyto", self.spec(path), str(local)), "скачивание")
         return local
+
+    # --- пачки ---
+
+    @staticmethod
+    def _batch_names(names: Iterable[str]) -> list[str]:
+        """Имена для `--files-from-raw`: только имя файла (без «/», «..», переводов строки), без повторов."""
+        out: list[str] = []
+        for n in names:
+            bad = (not n or n in (".", "..") or any(c in n for c in "/\\\n\r"))
+            if bad:
+                raise PermissionError(f"в пачке допустимы только имена файлов без пути: {n!r}")
+            if n not in out:
+                out.append(n)
+        return out
+
+    def _batch_timeout(self, count: int, size: int) -> float:
+        return max(self.timeout, count * BATCH_SECONDS_PER_FILE + size / BATCH_MIN_BYTES_PER_SEC)
+
+    def _copy_batch(self, src: str, dst: str, names: list[str], timeout: float) -> RunResult:
+        """Один `rclone copy src dst --files-from-raw <список> --transfers N`."""
+        fd, listing = tempfile.mkstemp(prefix="rclone-files-", suffix=".txt")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("".join(n + "\n" for n in names))
+            return self._run("copy", src, dst, "--files-from-raw", listing,
+                             "--transfers", str(TRANSFERS), timeout=timeout)
+        finally:
+            Path(listing).unlink(missing_ok=True)
+
+    def pull_many(self, path: str, names: Iterable[str], local_dir: Path, *, size: int = 0) -> list[str]:
+        """Скачать файлы `names` из папки `path` в `local_dir` одним вызовом rclone.
+
+        Возвращает имена, которых в `local_dir` после вызова нет (rclone молча пропускает файл,
+        исчезнувший с Drive, и при частичном сбое переносит остальные) — по факту на диске, не по stderr.
+        Не пришло ни одного файла и rclone упал → DriveError. `size` — общий объём для таймаута."""
+        names = self._batch_names(names)
+        local_dir = Path(local_dir)
+        local_dir.mkdir(parents=True, exist_ok=True)
+        if not names:
+            return []
+        for n in names:  # всё, что окажется на месте после вызова, — принесено этим вызовом
+            (local_dir / n).unlink(missing_ok=True)
+        res = self._copy_batch(self.spec(path), str(local_dir), names,
+                               self._batch_timeout(len(names), size))
+        missing = [n for n in names if not (local_dir / n).is_file()]
+        if res.returncode != 0:
+            if len(missing) == len(names):
+                self._check(res, "скачивание")
+            log.warning("скачивание пачкой: %d из %d не пришли: %s", len(missing), len(names),
+                        " | ".join(_clean_stderr(res.stderr, self.secrets)))
+        return missing
+
+    def push_many(self, local_dir: Path, names: Iterable[str], path: str) -> None:
+        """Залить файлы `names` из `local_dir` в папку `path` (только «На выгрузку») одним вызовом
+        rclone. Сбой → DriveError; что успело лечь, вызывающий узнаёт листингом папки."""
+        self._check_write(path, file=False)
+        names = self._batch_names(names)
+        if not names:
+            return
+        local_dir = Path(local_dir)
+        absent = [n for n in names if not (local_dir / n).is_file()]
+        if absent:
+            raise FileNotFoundError(f"нет локальных файлов для заливки: {', '.join(absent)}")
+        size = sum((local_dir / n).stat().st_size for n in names)
+        self._check(self._copy_batch(str(local_dir), self.spec(path), names,
+                                     self._batch_timeout(len(names), size)), "загрузка")
 
     # --- запись (только в разрешённые поддеревья) ---
 

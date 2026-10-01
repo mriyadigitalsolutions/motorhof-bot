@@ -374,3 +374,80 @@ def test_folder_id_missing_is_none(base, drive, fake):
     assert drive.folder_id(f"{OUT}/нет/глубже") is None           # нет и родителя
     fake.fail("lsjson", returncode=0, stdout='[{"Name": "На выгрузку", "IsDir": true}]')
     assert drive.folder_id(OUT) is None                          # запись без ID
+
+
+OUT = "MH_AUTO_НАЛИЧИЕ/2026/MH_1022_A/Фотографии/На выгрузку"
+
+
+def test_pull_many_one_copy_with_transfers_and_cyrillic_names(base, drive, fake, tmp_path):
+    names = ["IMG 1.DNG", "Снимок 2.heic", "#3 x.jpg"]
+    make_car(base, "MH_AUTO_НАЛИЧИЕ", "2026", "MH_1022_A", {n: n.encode() for n in names + ["c.jpg"]})
+    before = len(fake.calls)
+    missing = drive.pull_many("MH_AUTO_НАЛИЧИЕ/2026/MH_1022_A/Фотографии", names + ["нет.dng"],
+                              tmp_path / "в работе")
+    assert missing == ["нет.dng"]
+    assert sorted(p.name for p in (tmp_path / "в работе").iterdir()) == sorted(names)
+    [call] = fake.calls[before:]
+    assert call[1] == "copy" and call[call.index("--transfers") + 1] == "8" and "--files-from-raw" in call
+    assert "--no-traverse" not in call
+
+
+def test_pull_many_partial_failure_returns_missing_total_failure_raises(base, drive, fake, tmp_path):
+    make_car(base, "MH_AUTO_НАЛИЧИЕ", "2026", "MH_1022_A", {"a.jpg": b"a", "b.jpg": b"b"})
+    src = "MH_AUTO_НАЛИЧИЕ/2026/MH_1022_A/Фотографии"
+    fake.fail_files("b.jpg", times=1)
+    assert drive.pull_many(src, ["a.jpg", "b.jpg"], tmp_path / "1") == ["b.jpg"]
+    fake.fail("copy", stderr="ERROR : связь оборвалась", times=1)
+    with pytest.raises(DriveError):
+        drive.pull_many(src, ["a.jpg", "b.jpg"], tmp_path / "2")
+
+
+def test_push_many_one_copy_into_output_folder(base, drive, fake, tmp_path):
+    photos = make_car(base, "MH_AUTO_НАЛИЧИЕ", "2026", "MH_1022_A")
+    local = tmp_path / "готово"
+    local.mkdir()
+    for n in ("MH_1022_01.jpg", "MH_1022_02 b.jpg", "лишний.jpg"):
+        (local / n).write_bytes(n.encode())
+    before = len(fake.calls)
+    drive.push_many(local, ["MH_1022_01.jpg", "MH_1022_02 b.jpg"], OUT)
+    assert sorted(p.name for p in (photos / "На выгрузку").iterdir()) == ["MH_1022_01.jpg", "MH_1022_02 b.jpg"]
+    [call] = fake.calls[before:]
+    assert call[1] == "copy" and call[call.index("--transfers") + 1] == "8"
+    fake.fail_files("MH_1022_01.jpg", times=1)
+    with pytest.raises(DriveError):
+        drive.push_many(local, ["MH_1022_01.jpg", "лишний.jpg"], OUT)
+
+
+@pytest.mark.parametrize(
+    "remote_dir,names",
+    [
+        ("MH_AUTO_НАЛИЧИЕ/2026/MH_1022_A/Фотографии", ["x.jpg"]),
+        ("MH_AUTO_НАЛИЧИЕ/2026/MH_1022_A/Verkauf/На выгрузку", ["x.jpg"]),
+        (OUT, ["../x.jpg"]),
+        (OUT, ["sub/x.jpg"]),
+        (OUT, [".."]),
+        (OUT, ["x.jpg\nother.jpg"]),
+        (OUT, [""]),
+    ],
+)
+def test_push_many_refused_before_rclone(drive, fake, tmp_path, remote_dir, names):
+    (tmp_path / "x.jpg").write_bytes(b"x")
+    with pytest.raises(PermissionError):
+        drive.push_many(tmp_path, names, remote_dir)
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("names", [["a/b.jpg"], ["../a.jpg"], ["a\rb.jpg"]])
+def test_pull_many_bad_names_refused_before_rclone(drive, fake, tmp_path, names):
+    with pytest.raises(PermissionError):
+        drive.pull_many("MH_AUTO_НАЛИЧИЕ/2026/MH_1022_A/Фотографии", names, tmp_path)
+    assert fake.calls == []
+
+
+def test_batch_timeout_grows_with_volume_never_below_base(base, drive, fake, tmp_path):
+    make_car(base, "MH_AUTO_НАЛИЧИЕ", "2026", "MH_1022_A", {"a.jpg": b"a"})
+    src = "MH_AUTO_НАЛИЧИЕ/2026/MH_1022_A/Фотографии"
+    drive.pull_many(src, ["a.jpg"], tmp_path / "1")
+    assert fake.timeouts[-1] == 1800
+    drive.pull_many(src, [f"{i}.dng" for i in range(42)], tmp_path / "2", size=42 * 80_000_000)
+    assert fake.timeouts[-1] > 1800 * 2

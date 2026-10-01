@@ -26,6 +26,12 @@ RAW_SUFFIXES = {".dng"}
 HEIC_SUFFIXES = {".heic"}
 SOURCE_SUFFIXES = RAW_SUFFIXES | HEIC_SUFFIXES | {".jpg", ".jpeg"}
 
+# Форматы содержимого (по сигнатуре, см. sniff_format). Расширение — только фильтр «что берём»:
+# iPhone может отдать в Drive JPEG/HEIC под исходным именем .DNG (бой MH_1016).
+FORMAT_JPEG, FORMAT_HEIC, FORMAT_TIFF = "jpeg", "heic", "tiff"
+# Бренды ISO-BMFF (коробка ftyp), по которым файл считается HEIC/HEIF.
+_HEIF_BRANDS = {b"heic", b"heix", b"heim", b"heis", b"hevc", b"hevx", b"mif1", b"msf1"}
+
 # Способ конвертации DNG (входит в отпечаток варианта). Сменился способ — сменить строку.
 # embedded-jpeg-1: вшитый iPhone JPEG, запасной путь — rawpy с автояркостью (история 12, D02).
 DNG_METHOD = "embedded-jpeg-1"
@@ -101,9 +107,33 @@ def _meta(ex: Image.Exif | None, size: tuple[int, int]) -> ImageMeta:
     )
 
 
+def sniff_format(src: Path) -> str:
+    """Формат исходника по первым байтам: FORMAT_JPEG, FORMAT_HEIC или FORMAT_TIFF (в т.ч. DNG).
+
+    Неизвестная сигнатура, пустой или нечитаемый файл → ConvertError(UNREADABLE).
+    """
+    try:
+        with Path(src).open("rb") as f:
+            head = f.read(64)
+    except OSError as e:
+        raise ConvertError(UNREADABLE) from e
+    if head[:3] == b"\xff\xd8\xff":
+        return FORMAT_JPEG
+    if head[:4] in (b"II*\x00", b"MM\x00*"):
+        return FORMAT_TIFF
+    if len(head) >= 12 and head[4:8] == b"ftyp":
+        # major brand (8:12) и совместимые бренды (с 16-го байта до конца коробки ftyp)
+        box = min(int.from_bytes(head[:4], "big"), len(head))
+        brands = {head[8:12]} | {head[i:i + 4] for i in range(16, box - 3, 4)}
+        if brands & _HEIF_BRANDS:
+            return FORMAT_HEIC
+    raise ConvertError(UNREADABLE)
+
+
 def read_meta(src: Path) -> ImageMeta:
     """Метаданные без декодирования пикселей (для порядка нумерации)."""
     src = Path(src)
+    sniff_format(src)  # неизвестная сигнатура → UNREADABLE, как в to_jpeg
     try:
         with Image.open(src) as im:
             return _meta(_load_exif(im), im.size)
@@ -219,12 +249,18 @@ def _decode_dng(src: Path) -> tuple[Image.Image, Image.Exif | None]:
 
 
 def _decode(src: Path) -> tuple[Image.Image, Image.Exif | None]:
-    """Декодирует исходник в RGB sRGB с физически применённой ориентацией."""
-    if src.suffix.lower() in RAW_SUFFIXES:
+    """Декодирует исходник в RGB sRGB с физически применённой ориентацией.
+
+    Декодер выбирается по содержимому (sniff_format), не по расширению.
+    """
+    fmt = sniff_format(src)
+    if fmt == FORMAT_TIFF:
         return _decode_dng(src)
-    if src.suffix.lower() in HEIC_SUFFIXES:
+    if fmt == FORMAT_HEIC:
         _check_isobmff(src)
-    with Image.open(src) as im:
+    # formats — чтобы Pillow не угадал по содержимому что-то третье (MPO открывается как JPEG)
+    formats = ["JPEG", "MPO"] if fmt == FORMAT_JPEG else ["HEIF"]
+    with Image.open(src, formats=formats) as im:
         im.load()
         ex = _load_exif(im)
         icc = im.info.get("icc_profile")

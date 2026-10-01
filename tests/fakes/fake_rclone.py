@@ -1,7 +1,9 @@
 """Фейковый rclone поверх локальной папки — runner для `core.drive.Drive`.
 
 Понимает то подмножество rclone, которым пользуется Drive-слой: `lsjson` (`--dirs-only`,
-`--files-only`, `--max-depth`, `--hash`, `--stat`), `copyto`, `moveto`, `mkdir`, `deletefile`.
+`--files-only`, `--max-depth`, `--hash`, `--stat`), `copyto`, `copy` (`--files-from-raw`,
+`--transfers`), `moveto`, `mkdir`, `deletefile`. `copy` — как rclone 1.71.1: имени из списка нет
+в источнике — молча пропускается (код 0), папка назначения создаётся, нет папки-источника — код 3.
 Отдаёт `ID` и `Hashes.sha256` как Google Drive; `lsjson --stat` по папке —
 ошибка (на общем диске Drive он медленный и без `ID`): папки ищутся листингом родителя. Путь `<remote>:<путь>` ведёт в `base/<путь>`,
 путь без двоеточия — обычный локальный файл.
@@ -13,6 +15,8 @@
   подходящие вызовы падают с ненулевым кодом (`times` раз, по умолчанию навсегда); с
   `returncode=0` и `stdout` — отдают этот вывод (битый JSON); `hang=True` — «виснут»
   (`subprocess.TimeoutExpired`, как `subprocess_runner` по таймауту);
+- `fail_files(*names, times=None)` — в `copy` эти файлы «не переносятся» (остальные переносятся,
+  код 1, в stderr строка на каждый), как частичный сбой пачки у rclone; `times` — сколько вызовов `copy`;
 - путь после `<remote>:` с `..` или вне `base` — ошибка rclone (код 1), за пределы `base` фейк не ходит;
 - `calls` — журнал всех вызовов (списки аргументов), `trashed` — что ушло в корзину.
 """
@@ -61,6 +65,7 @@ class FakeRclone:
     trashed: list[str] = field(default_factory=list)
     timeouts: list[float | None] = field(default_factory=list)
     _failures: list[_Failure] = field(default_factory=list)
+    _broken: dict[str, int | None] = field(default_factory=dict)  # имя → сколько ещё copy падать
 
     def __post_init__(self) -> None:
         self.base = Path(self.base)
@@ -81,6 +86,11 @@ class FakeRclone:
         """Вызовы `command` (подстрока `match` в аргументах, если задана) завершатся ошибкой."""
         self._failures.append(_Failure(command, returncode, stderr, match, times, stdout, hang))
 
+    def fail_files(self, *names: str, times: int | None = None) -> None:
+        """В `copy` эти файлы не перенесутся (`times` вызовов `copy`, по умолчанию всегда)."""
+        for n in names:
+            self._broken[n] = times
+
     def commands(self, command: str | None = None) -> list[list[str]]:
         """Журнал вызовов без имени бинаря; по желанию только одной команды."""
         out = [c[1:] for c in self.calls]
@@ -89,7 +99,7 @@ class FakeRclone:
     # --- runner ---
 
     # флаги rclone, у которых есть значение отдельным аргументом
-    VALUE_FLAGS = {"--max-depth", "--hash-type", "--timeout", "--config"}
+    VALUE_FLAGS = {"--max-depth", "--hash-type", "--timeout", "--config", "--files-from-raw", "--transfers"}
 
     def __call__(self, args: list[str], timeout: float | None = None) -> RunResult:
         args = list(args)
@@ -201,6 +211,36 @@ class FakeRclone:
             return RunResult(3, "", NOTICE + "\nERROR : file not found\n")
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(src, dst)
+        return RunResult(0, "", NOTICE + "\n")
+
+    def _cmd_copy(self, paths: list[str], flags: list[str]) -> RunResult:
+        src, dst = self._local(paths[0]), self._local(paths[1])
+        transfers = self._flag(flags, "--transfers")
+        if transfers is not None and not (transfers.isdigit() and int(transfers) > 0):
+            return RunResult(1, "", NOTICE + f"\nERROR : invalid --transfers {transfers!r}\n")
+        if not src.is_dir():
+            return RunResult(3, "", NOTICE + "\nERROR : error reading source root directory: directory not found\n")
+        listed = self._flag(flags, "--files-from-raw")
+        if listed is not None:
+            names = [n for n in Path(listed).read_text(encoding="utf-8").split("\n") if n]
+        else:
+            names = sorted(p.relative_to(src).as_posix() for p in src.rglob("*") if p.is_file())
+        errors = []
+        dst.mkdir(parents=True, exist_ok=True)
+        for name in names:
+            if not (src / name).is_file():
+                continue  # как rclone: отсутствующее в источнике молча пропускается
+            left = self._broken.get(name, 0)
+            if name in self._broken and (left is None or left > 0):
+                errors.append(f"ERROR : {name}: Failed to copy: fake: связь оборвалась")
+                continue
+            (dst / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src / name, dst / name)
+        for name, left in list(self._broken.items()):
+            if left is not None and left > 0:
+                self._broken[name] = left - 1
+        if errors:
+            return RunResult(1, "", "\n".join([NOTICE, *errors, "ERROR : Attempt 3/3 failed"]) + "\n")
         return RunResult(0, "", NOTICE + "\n")
 
     def _cmd_moveto(self, paths: list[str], flags: list[str]) -> RunResult:

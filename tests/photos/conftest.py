@@ -12,9 +12,13 @@ from tests.fakes.images import make_jpeg as _make_jpeg
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 HEIC_FIXTURE = FIXTURES / "IMG_4079.HEIC"
 DNG_FIXTURE = FIXTURES / "IMG_4561.DNG"
+# iPhone отдал в Drive JPEG (MPO) под именем .DNG (бой MH_1016, таск 15)
+JPEG_NAMED_DNG_FIXTURE = FIXTURES / "IMG_3729_jpeg_named.DNG"
 
 needs_heic = pytest.mark.skipif(not HEIC_FIXTURE.exists(), reason="нет фикстуры IMG_4079.HEIC")
 needs_dng = pytest.mark.skipif(not DNG_FIXTURE.exists(), reason="нет фикстуры IMG_4561.DNG")
+needs_jpeg_named_dng = pytest.mark.skipif(not JPEG_NAMED_DNG_FIXTURE.exists(),
+                                          reason="нет фикстуры IMG_3729_jpeg_named.DNG")
 
 
 # Здесь по умолчанию крупный кадр с меткой — тесты конвертации проверяют размеры и поворот.

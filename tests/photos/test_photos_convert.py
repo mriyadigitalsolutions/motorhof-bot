@@ -315,3 +315,25 @@ def test_failed_save_keeps_previous_dst_and_leaves_no_part(tmp_path, monkeypatch
         to_jpeg(src, LISTING, dst)
     assert dst.read_bytes() == b"previous-good-jpeg"
     assert [p.name for p in out_dir.iterdir()] == ["MH_1022_01.jpg"]
+
+
+# --- Формат по содержимому, а не по расширению (таск 15) ---
+
+@pytest.mark.parametrize("name", ["IMG_5.DNG", "IMG_5.dng", "IMG_5.HEIC", "IMG_5.JPG", "IMG_5.jpeg"])
+def test_jpeg_content_converted_as_jpeg_whatever_the_suffix(tmp_path, name):
+    good = make_jpeg(tmp_path / "src.jpg", size=(3000, 2000),
+                     taken=datetime(2026, 9, 18, 17, 11, 57), orientation=6)
+    src = tmp_path / name
+    src.write_bytes(good.read_bytes())
+    dst = tmp_path / "MH_1016_01.jpg"
+    meta = to_jpeg(src, LISTING, dst)
+    out = Image.open(dst)
+    assert out.size == (1333, 2000)  # повёрнут по Orientation=6 и уменьшен
+    r, g, b = out.convert("RGB").getpixel((1333 - 20, 20))
+    assert r > 200 and g < 60 and b < 60
+    exif = out.getexif()
+    assert exif.get(0x0112) == 1
+    assert not dict(exif.get_ifd(GPS_IFD))
+    assert "sRGB" in icc_description(out)
+    assert meta.taken == datetime(2026, 9, 18, 17, 11, 57)
+    assert read_meta(src).taken == datetime(2026, 9, 18, 17, 11, 57)
