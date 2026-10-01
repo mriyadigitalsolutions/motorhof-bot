@@ -1,11 +1,18 @@
-"""SQLite: очередь задач, журнал запусков, таблицы модулей.
+"""SQLite: очередь задач, журнал событий, таблицы модулей.
 
 Одно соединение на процесс; обращения сериализуются замком, поэтому методы можно звать
 и из event loop, и из потока обработчика (`asyncio.to_thread`).
 Время хранится строкой ISO 8601 в UTC; часы подменяются в тестах (`clock`).
+
+Журнал — общая таблица `events` (действия всех модулей). Прежняя таблица `runs` (запуски
+/fotos) при первом старте новой версии переносится в `events` с теми же id и заменяется
+представлением `runs` с прежними колонками: старый API `record_run_*`/`last_runs` работает
+поверх `events`. Версия схемы — `PRAGMA user_version`; перед миграцией файл копируется
+в `<имя>.bak-<дата>` (откат — вернуть копию и старый код).
 """
 from __future__ import annotations
 
+import json
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -33,21 +40,61 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS jobs_status ON jobs (status, id);
 
-CREATE TABLE IF NOT EXISTS runs (
-    id            INTEGER PRIMARY KEY AUTOINCREMENT,
-    mh            TEXT    NOT NULL,
-    telegram_id   INTEGER,
-    user_name     TEXT,
-    started_at    TEXT    NOT NULL,
-    finished_at   TEXT,
-    files_total   INTEGER NOT NULL DEFAULT 0,
-    files_done    INTEGER NOT NULL DEFAULT 0,
-    files_skipped INTEGER NOT NULL DEFAULT 0,
-    files_failed  INTEGER NOT NULL DEFAULT 0,
-    status        TEXT    NOT NULL DEFAULT 'running',
-    error_text    TEXT
+CREATE TABLE IF NOT EXISTS events (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts           TEXT    NOT NULL,
+    actor_id     INTEGER,
+    module       TEXT    NOT NULL,
+    action       TEXT    NOT NULL,
+    object_type  TEXT,
+    object_id    TEXT,
+    payload_json TEXT    NOT NULL DEFAULT '{}',
+    status       TEXT    NOT NULL DEFAULT 'done',
+    error        TEXT
 );
+CREATE INDEX IF NOT EXISTS events_module ON events (module, action, id);
 """
+
+
+SCHEMA_VERSION = 1
+
+# Запуски /fotos в журнале: module/action записи, которую раньше хранила таблица runs.
+RUN_MODULE, RUN_ACTION, RUN_OBJECT = "photos", "convert", "car"
+
+# Совместимость со старым API и тестами: runs — представление над events с прежними колонками.
+RUNS_VIEW = f"""
+CREATE VIEW IF NOT EXISTS runs AS
+SELECT id,
+       object_id                                               AS mh,
+       actor_id                                                AS telegram_id,
+       json_extract(payload_json, '$.user_name')               AS user_name,
+       ts                                                      AS started_at,
+       json_extract(payload_json, '$.finished_at')             AS finished_at,
+       COALESCE(json_extract(payload_json, '$.files_total'), 0)   AS files_total,
+       COALESCE(json_extract(payload_json, '$.files_done'), 0)    AS files_done,
+       COALESCE(json_extract(payload_json, '$.files_skipped'), 0) AS files_skipped,
+       COALESCE(json_extract(payload_json, '$.files_failed'), 0)  AS files_failed,
+       status,
+       error                                                   AS error_text
+FROM events
+WHERE module = '{RUN_MODULE}' AND action = '{RUN_ACTION}';
+"""
+
+# Перенос строк старой таблицы runs: id сохраняются (на них ссылается photos_job_runs).
+_COPY_RUNS = f"""
+INSERT INTO events (id, ts, actor_id, module, action, object_type, object_id,
+                    payload_json, status, error)
+SELECT id, started_at, telegram_id, '{RUN_MODULE}', '{RUN_ACTION}', '{RUN_OBJECT}', mh,
+       json_object('user_name', user_name, 'finished_at', finished_at,
+                   'files_total', files_total, 'files_done', files_done,
+                   'files_skipped', files_skipped, 'files_failed', files_failed),
+       status, error_text
+FROM runs ORDER BY id
+"""
+
+
+class MigrationError(RuntimeError):
+    """Миграция схемы не прошла; транзакция откатана, данные в прежнем виде."""
 
 
 def utc_now() -> datetime:
@@ -67,6 +114,7 @@ class Database:
             self._conn.execute("PRAGMA journal_mode=WAL")
             self._conn.execute("PRAGMA foreign_keys=ON")
         self.ensure_schema(CORE_SCHEMA)
+        self._migrate()
 
     # --- общий доступ -------------------------------------------------------
     def now_iso(self) -> str:
@@ -100,25 +148,111 @@ class Database:
         with self._lock:
             self._conn.close()
 
-    # --- журнал запусков ----------------------------------------------------
+    # --- миграции -----------------------------------------------------------
+    def schema_version(self) -> int:
+        return self.fetchone("PRAGMA user_version")["user_version"]
+
+    def _has_table(self, name: str) -> bool:
+        return self.fetchone("SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ?",
+                             (name,)) is not None
+
+    def _migrate(self) -> None:
+        """Версия 0 → 1: runs → events. Идемпотентно; при сбое — откат и MigrationError."""
+        if self.schema_version() >= SCHEMA_VERSION:
+            return
+        legacy = self._has_table("runs")
+        if legacy:
+            self.backup()
+        try:
+            with self.transaction():
+                if legacy:
+                    expected = self.fetchone("SELECT COUNT(*) AS n FROM runs")["n"]
+                    self._copy_legacy_runs()
+                    got = self.fetchone(
+                        "SELECT COUNT(*) AS n FROM events WHERE module = ? AND action = ?",
+                        (RUN_MODULE, RUN_ACTION))["n"]
+                    if got != expected:
+                        raise MigrationError(f"перенесено {got} записей runs из {expected}")
+                    self._conn.execute("DROP TABLE runs")
+                self._conn.execute(RUNS_VIEW)
+                self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+        except MigrationError:
+            raise
+        except Exception as e:
+            raise MigrationError(f"миграция журнала runs → events: {type(e).__name__}: {e}") from e
+
+    def _copy_legacy_runs(self) -> None:
+        self._conn.execute(_COPY_RUNS)
+
+    def backup(self) -> Path | None:
+        """Копия базы рядом с файлом (`<имя>.bak-<дата>`) через backup API — с учётом WAL."""
+        if str(self.path) == ":memory:":
+            return None
+        stamp = self.clock().astimezone(timezone.utc).strftime("%Y%m%d-%H%M%S")
+        target = self.path.with_name(f"{self.path.name}.bak-{stamp}")
+        dst = sqlite3.connect(str(target))
+        try:
+            with self._lock:
+                self._conn.backup(dst)
+        finally:
+            dst.close()
+        return target
+
+    # --- журнал событий -----------------------------------------------------
+    def log_event(self, module: str, action: str, *, actor_id: int | None = None,
+                  object_type: str | None = None, object_id: str | None = None,
+                  payload: dict[str, Any] | None = None, status: str = "done",
+                  error: str | None = None) -> int:
+        """Запись в журнал; error должен быть уже пропущен через core.log.redact."""
+        return self.execute(
+            "INSERT INTO events (ts, actor_id, module, action, object_type, object_id,"
+            " payload_json, status, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (self.now_iso(), actor_id, module, action, object_type, object_id,
+             json.dumps(payload or {}, ensure_ascii=False), status, error),
+        )
+
+    def finish_event(self, event_id: int, status: str, error: str | None = None,
+                     **payload: Any) -> None:
+        """Итог события: статус, ошибка и поля payload (дополняют прежние; None не пишется)."""
+        with self._lock:
+            row = self.fetchone("SELECT payload_json FROM events WHERE id = ?", (event_id,))
+            if row is None:
+                return
+            data = json.loads(row["payload_json"] or "{}")
+            data.update({k: v for k, v in payload.items() if v is not None})
+            self.execute("UPDATE events SET status = ?, error = ?, payload_json = ? WHERE id = ?",
+                         (status, error, json.dumps(data, ensure_ascii=False), event_id))
+
+    def last_events(self, n: int = 10, module: str | None = None) -> list[dict[str, Any]]:
+        """Последние события (новые первыми); payload_json разобран в поле payload."""
+        if module is None:
+            rows = self.fetchall("SELECT * FROM events ORDER BY id DESC LIMIT ?", (n,))
+        else:
+            rows = self.fetchall("SELECT * FROM events WHERE module = ? ORDER BY id DESC LIMIT ?",
+                                 (module, n))
+        for row in rows:
+            try:
+                row["payload"] = json.loads(row.pop("payload_json") or "{}")
+            except ValueError:
+                row["payload"] = {}
+        return rows
+
+    # --- запуски /fotos (прежний API поверх events) -------------------------
     def record_run_start(self, mh: str, telegram_id: int | None, user_name: str | None,
                          files_total: int = 0) -> int:
-        return self.execute(
-            "INSERT INTO runs (mh, telegram_id, user_name, started_at, files_total, status)"
-            " VALUES (?, ?, ?, ?, ?, 'running')",
-            (mh, telegram_id, user_name, self.now_iso(), files_total),
-        )
+        payload = {"user_name": user_name, "finished_at": None, "files_total": files_total,
+                   "files_done": 0, "files_skipped": 0, "files_failed": 0}
+        return self.log_event(RUN_MODULE, RUN_ACTION, actor_id=telegram_id,
+                              object_type=RUN_OBJECT, object_id=mh, payload=payload,
+                              status="running")
 
     def record_run_finish(self, run_id: int, status: str, files_total: int | None = None,
                           files_done: int = 0, files_skipped: int = 0, files_failed: int = 0,
                           error_text: str | None = None) -> None:
         """error_text должен быть уже пропущен через core.log.redact."""
-        self.execute(
-            "UPDATE runs SET finished_at = ?, status = ?, files_total = COALESCE(?, files_total),"
-            " files_done = ?, files_skipped = ?, files_failed = ?, error_text = ? WHERE id = ?",
-            (self.now_iso(), status, files_total, files_done, files_skipped, files_failed,
-             error_text, run_id),
-        )
+        self.finish_event(run_id, status, error=error_text, finished_at=self.now_iso(),
+                          files_total=files_total, files_done=files_done,
+                          files_skipped=files_skipped, files_failed=files_failed)
 
     def last_runs(self, n: int = 10) -> list[dict[str, Any]]:
         return self.fetchall("SELECT * FROM runs ORDER BY id DESC LIMIT ?", (n,))
