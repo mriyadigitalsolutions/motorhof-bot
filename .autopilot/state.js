@@ -1,7 +1,7 @@
 window.STATE =
 {
   "slug": "menu-reply-keyboard",
-  "dir": "2026-10-01-menu-reply-keyboard--wip",
+  "dir": "2026-10-01-menu-reply-keyboard",
   "title": "MOTORHOF: меню на клавиатуре внизу",
   "mode": "semi",
   "depth": "normal",
@@ -11,8 +11,8 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-10-01T16:48:00+00:00",
-  "updatedAt": "2026-10-01T17:05:44+00:00",
-  "finishedAt": null,
+  "updatedAt": "2026-10-01T17:08:09+00:00",
+  "finishedAt": "2026-10-01T17:08:09+00:00",
   "stages": [
     {
       "id": "preflight",
@@ -60,8 +60,10 @@ window.STATE =
     },
     {
       "id": "final",
-      "status": "active",
-      "startedAt": "2026-10-01T17:05:44+00:00"
+      "status": "done",
+      "startedAt": "2026-10-01T17:05:44+00:00",
+      "finishedAt": "2026-10-01T17:08:09+00:00",
+      "note": "слепая приёмка 9/9, память обновлена"
     }
   ],
   "requirements": {
