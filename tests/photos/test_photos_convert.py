@@ -10,8 +10,9 @@ import pytest
 from PIL import Image, ImageCms, ImageStat
 
 from modules.photos.convert import ConvertError, Variant, load_variants, read_meta, to_jpeg
-from tests.photos.conftest import (DNG_FIXTURE, HEIC_FIXTURE, jpeg_bytes_truncated, make_jpeg,
-                                   needs_dng, needs_heic)
+from tests.photos.conftest import (DNG_FIXTURE, HEIC_FIXTURE, JPEG_NAMED_DNG_FIXTURE,
+                                   jpeg_bytes_truncated, make_jpeg, needs_dng, needs_heic,
+                                   needs_jpeg_named_dng)
 
 LISTING = Variant(name="listing", max_side=2000, quality=92, subsampling=0, suffix="")
 GPS_IFD, EXIF_IFD = 0x8825, 0x8769
@@ -337,3 +338,64 @@ def test_jpeg_content_converted_as_jpeg_whatever_the_suffix(tmp_path, name):
     assert "sRGB" in icc_description(out)
     assert meta.taken == datetime(2026, 9, 18, 17, 11, 57)
     assert read_meta(src).taken == datetime(2026, 9, 18, 17, 11, 57)
+
+
+@pytest.mark.parametrize("name", ["IMG_6.DNG", "IMG_6.JPG", "IMG_6.jpeg", "IMG_6.HEIC"])
+def test_heic_content_converted_as_heic_whatever_the_suffix(tmp_path, name):
+    pillow_heif = pytest.importorskip("pillow_heif")
+    pillow_heif.register_heif_opener()
+    from tests.photos.conftest import make_exif
+    base = Image.new("RGB", (800, 600), (40, 90, 160))
+    base.paste((255, 0, 0), (0, 0, 80, 60))
+    src = tmp_path / name
+    base.save(src, "HEIF", quality=90,
+              exif=make_exif(datetime(2026, 9, 1, 10, 0, 0), orientation=6).tobytes())
+    to_jpeg(src, LISTING, tmp_path / "o.jpg")
+    out = Image.open(tmp_path / "o.jpg")
+    assert out.size == (600, 800)
+    r, g, b = out.convert("RGB").getpixel((600 - 20, 20))
+    assert r > 200 and g < 60 and b < 60
+    assert out.getexif().get(0x0112) == 1
+    assert not dict(out.getexif().get_ifd(GPS_IFD))
+    assert read_meta(src).taken == datetime(2026, 9, 1, 10, 0, 0)
+
+
+@pytest.mark.parametrize("name, data", [
+    ("IMG_7.DNG", b"not an image at all, just text" * 100),
+    ("IMG_7.DNG", "valid_png"),  # целый PNG: Pillow его открыл бы, но формат не из списка
+    ("IMG_7.JPG", "valid_png"),
+    ("IMG_7.JPG", b"GIF89a" + b"\x00" * 200),
+    ("IMG_7.HEIC", b"\x00\x00\x00\x18ftypisom\x00\x00\x00\x00isomiso2" + b"\x00" * 64),
+    ("IMG_7.DNG", b"\xff\xd8\xff\xe0" + b"\x00" * 10),
+])
+def test_unknown_or_broken_content_is_unreadable(tmp_path, name, data):
+    src = tmp_path / name
+    if data == "valid_png":
+        Image.new("RGB", (300, 200), (40, 90, 160)).save(src, "PNG")
+    else:
+        src.write_bytes(data)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    with pytest.raises(ConvertError) as err:
+        to_jpeg(src, LISTING, out_dir / "MH_1016_01.jpg")
+    assert str(err.value) == "файл повреждён или не читается"
+    assert list(out_dir.iterdir()) == []
+    with pytest.raises(ConvertError):
+        read_meta(src)
+
+
+@needs_jpeg_named_dng
+def test_iphone_jpeg_named_dng_fixture(tmp_path):
+    """Бой MH_1016: iPhone 13 Pro Max отдал JPEG (MPO 4032x3024) под именем IMG_3729.DNG."""
+    dst = tmp_path / "MH_1016_01.jpg"
+    meta = to_jpeg(JPEG_NAMED_DNG_FIXTURE, LISTING, dst)
+    out = Image.open(dst)
+    assert out.format == "JPEG" and max(out.size) == 2000
+    assert (meta.width, meta.height) == out.size
+    assert "sRGB" in icc_description(out)
+    assert mean_brightness(dst) > 60
+    exif = out.getexif()
+    assert exif.get(0x0110) == "iPhone 13 Pro Max"
+    assert exif.get(0x0112) == 1
+    assert not dict(exif.get_ifd(GPS_IFD))
+    assert read_meta(JPEG_NAMED_DNG_FIXTURE).taken == meta.taken

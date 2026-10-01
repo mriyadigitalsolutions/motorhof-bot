@@ -61,6 +61,8 @@ class Variant:
 
         Для DNG в отпечаток входит способ конвертации (DNG_METHOD): его смена пересоздаёт
         выходы из DNG под теми же именами, а у HEIC/JPG отпечаток остаётся прежним.
+        Метка ставится по расширению имени, а не по содержимому: план строится до скачивания.
+        У .DNG, оказавшегося JPEG/HEIC, она лишняя, но стабильна — повтор ничего не пересчитывает.
         """
         params = {k: v for k, v in asdict(self).items() if k not in ("name", "suffix", "on_demand")}
         if src_name is not None and Path(src_name).suffix.lower() in RAW_SUFFIXES:

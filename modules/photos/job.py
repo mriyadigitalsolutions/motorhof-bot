@@ -32,6 +32,7 @@ from .store import (  # noqa: F401 — ошибки задачи остаютс�
 log = logging.getLogger(__name__)
 
 SPACE_RESERVE = 1.2  # скачиваемое + 20%
+DOWNLOAD_FAILED = "не скачался с Drive, запусти /fotos ещё раз"
 
 Progress = Callable[[int, int], None]
 Announce = Callable[[str], None]
@@ -159,10 +160,16 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
 
     in_dir, out_local = tmp / "in", tmp / "out"
     out_local.mkdir(parents=True)
-    local: dict[str, Path] = {}
+    # все нужные исходники — одной пачкой; что не пришло, узнаём по диску, не по stderr
+    missing = set(drive.pull_many(src_dir, sorted(need), in_dir, size=sum(remote[n].size for n in need)))
+    local: dict[str, Path] = {n: in_dir / n for n in need if n not in missing}
+    known = {f["sha256"] for f in manifest.files}
+    unavailable: dict[str, str] = {}  # исходник с номером в манифесте, не скачался → ошибка в рендере
 
     def fetch(name: str) -> Path:
-        if name not in local:
+        if name in unavailable:
+            raise ConvertError(unavailable[name])
+        if name not in local:  # вне чернового плана (на деле не бывает) — по одному
             local[name] = drive.pull(f"{src_dir}/{name}", in_dir / name)
         return local[name]
 
@@ -170,6 +177,14 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
     sources: list[Source] = []
     for f in sorted(remote.values(), key=lambda f: f.name):
         sha, taken = f.sha256, None
+        if f.name in missing:
+            if False:
+                # номер уже закреплён: execute отметит ошибку, запись в манифесте не тронет
+                unavailable[f.name] = DOWNLOAD_FAILED
+                sources.append(Source(f.name, sha, None, _mtime(f.mtime)))
+            else:
+                errors.append((f.name, DOWNLOAD_FAILED))
+            continue
         if f.name in need:
             path = fetch(f.name)
             sha = sha or sha256_file(path)
@@ -196,23 +211,14 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
         if progress:
             progress(min(attempts, total), total)
 
-    uploaded: list[str] = []
-
     def render(item: RenderItem) -> None:
-        nonlocal attempts, out_exists, out_id
-        dst = out_local / item.out_name
+        nonlocal attempts
         try:
-            to_jpeg(fetch(item.source.name), item.variant, dst)
+            to_jpeg(fetch(item.source.name), item.variant, out_local / item.out_name)
         finally:
             attempts += 1
             if progress:
                 progress(min(attempts, total), total)
-        if not out_exists:  # «На выгрузку» — только когда есть что залить
-            out_id = drive.mkdir(out_dir)
-            out_exists = True
-        drive.push(dst, f"{out_dir}/{item.out_name}")
-        uploaded.append(item.out_name)
-        dst.unlink(missing_ok=True)
 
     def push_manifest() -> None:
         # манифест — последним; без него и без залитых JPEG на Drive ничего не создаём
@@ -223,16 +229,25 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
         manifest.dump(tmp / "manifest.out.json")
         drive.push(tmp / "manifest.out.json", f"{out_dir}/{MANIFEST_NAME}")
 
-    try:
-        ex = manifest.execute(sources, variants, existing, render, on_plan=on_plan)
-    except DriveError:
-        if uploaded:  # уже залитое учитываем, чтобы следующий запуск его не переделывал
-            try:
-                push_manifest()
-            except DriveError:
-                log.warning("%s: манифест после сбоя заливки не залит", code)
-        raise
+    ex = manifest.execute(sources, variants, existing, render, on_plan=on_plan)
     errors.extend(ex.errors)
+    names = list(dict.fromkeys(i.out_name for i in ex.done))
+    if names:
+        if not out_exists:  # «На выгрузку» — только когда есть что залить
+            out_id = drive.mkdir(out_dir)
+            out_exists = True
+        try:
+            drive.push_many(out_local, names, out_dir)  # все JPEG — одной пачкой
+        except DriveError:
+            # в манифест — только то, что реально легло (листинг + хэш), остальное как было
+            landed = _keep_uploaded(manifest, before, ex.done, out_local,
+                                    {f.name: f.sha256 for f in drive.list_files(out_dir)})
+            if landed:
+                try:
+                    push_manifest()
+                except DriveError:
+                    log.warning("%s: манифест после сбоя заливки не залит", code)
+            raise
     push_manifest()
 
     rendered = {i.out_name for i in ex.done}
@@ -245,6 +260,23 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
         link=Drive.folder_link(out_id) if out_exists else None,
         status="partial" if errors else "done",
     )
+
+
+def _keep_uploaded(manifest: Manifest, before: list[dict], done: list[RenderItem],
+                   out_local: Path, remote: dict[str, str | None]) -> int:
+    """После сбоя пачки заливки: выход, чьего файла с тем же хэшем нет в «На выгрузку», убирается из
+    манифеста (прежняя запись, если была, возвращается) — следующий прогон его переделает."""
+    old = {(f["sha256"], f["variant"]): f for f in before}
+    landed = 0
+    for item in done:
+        if remote.get(item.out_name) == sha256_file(out_local / item.out_name):
+            landed += 1
+            continue
+        key = (item.source.sha256, item.variant.name)
+        manifest.files = [f for f in manifest.files if (f["sha256"], f["variant"]) != key]
+        if key in old:
+            manifest.files.append(copy.deepcopy(old[key]))
+    return landed
 
 
 def _check_space(code: str, tmp: Path, download: int) -> None:

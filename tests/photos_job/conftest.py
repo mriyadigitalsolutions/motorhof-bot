@@ -31,9 +31,10 @@ def listing():
 
 
 def pushed(fake: FakeRclone) -> list[str]:
-    """Имена файлов, залитых на «Drive», по порядку."""
-    return [c[2].rsplit("/", 1)[-1] for c in fake.commands("copyto") if c[2].startswith("motorhof:")]
+    """Имена файлов, которые заливали на «Drive» (copyto и пачки copy), по порядку."""
+    return [dst.rsplit("/", 1)[-1] for _, dst in fake.transfers() if dst.startswith("motorhof:")]
 
 
 def pulled(fake: FakeRclone) -> list[str]:
-    return [c[1].rsplit("/", 1)[-1] for c in fake.commands("copyto") if c[1].startswith("motorhof:")]
+    """Имена файлов, которые скачивали с «Drive» (copyto и пачки copy), по порядку."""
+    return [src.rsplit("/", 1)[-1] for src, _ in fake.transfers() if src.startswith("motorhof:")]

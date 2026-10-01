@@ -16,9 +16,10 @@
   `returncode=0` и `stdout` — отдают этот вывод (битый JSON); `hang=True` — «виснут»
   (`subprocess.TimeoutExpired`, как `subprocess_runner` по таймауту);
 - `fail_files(*names, times=None)` — в `copy` эти файлы «не переносятся» (остальные переносятся,
-  код 1, в stderr строка на каждый), как частичный сбой пачки у rclone; `times` — сколько вызовов `copy`;
+  код 1, в stderr строка на каждый), как частичный сбой пачки у rclone; `times` — сколько раз каждому файлу упасть;
 - путь после `<remote>:` с `..` или вне `base` — ошибка rclone (код 1), за пределы `base` фейк не ходит;
-- `calls` — журнал всех вызовов (списки аргументов), `trashed` — что ушло в корзину.
+- `calls` — журнал всех вызовов (списки аргументов), `trashed` — что ушло в корзину;
+  `transfers()` — по порядку все файлы, которые просили перенести (`copyto` и имена из списков `copy`).
 """
 from __future__ import annotations
 
@@ -64,6 +65,7 @@ class FakeRclone:
     calls: list[list[str]] = field(default_factory=list)
     trashed: list[str] = field(default_factory=list)
     timeouts: list[float | None] = field(default_factory=list)
+    listed: dict[int, list[str]] = field(default_factory=dict)  # номер вызова → имена из --files-from-raw
     _failures: list[_Failure] = field(default_factory=list)
     _broken: dict[str, int | None] = field(default_factory=dict)  # имя → сколько ещё copy падать
 
@@ -87,7 +89,7 @@ class FakeRclone:
         self._failures.append(_Failure(command, returncode, stderr, match, times, stdout, hang))
 
     def fail_files(self, *names: str, times: int | None = None) -> None:
-        """В `copy` эти файлы не перенесутся (`times` вызовов `copy`, по умолчанию всегда)."""
+        """В `copy` эти файлы не перенесутся (`times` раз каждый, по умолчанию всегда)."""
         for n in names:
             self._broken[n] = times
 
@@ -95,6 +97,16 @@ class FakeRclone:
         """Журнал вызовов без имени бинаря; по желанию только одной команды."""
         out = [c[1:] for c in self.calls]
         return [c for c in out if command is None or (c and c[0] == command)]
+
+    def transfers(self) -> list[tuple[str, str]]:
+        """(откуда, куда) по каждому файлу, который просили перенести, в порядке вызовов."""
+        out = []
+        for i, c in enumerate(self.calls):
+            if c[1] == "copyto":
+                out.append((c[2], c[3]))
+            elif c[1] == "copy":
+                out += [(f"{c[2]}/{n}", f"{c[3]}/{n}") for n in self.listed.get(i, [])]
+        return out
 
     # --- runner ---
 
@@ -107,6 +119,10 @@ class FakeRclone:
         self.timeouts.append(timeout)
         assert all(isinstance(a, str) for a in args), "аргументы — только строки"
         cmd, rest = args[1], args[2:]
+        if "--files-from-raw" in rest:  # список удаляется сразу после вызова — запоминаем имена
+            listing = Path(rest[rest.index("--files-from-raw") + 1])
+            self.listed[len(self.calls) - 1] = [
+                n for n in listing.read_text(encoding="utf-8").split("\n") if n]
         for f in self._failures:
             if f.command == cmd and (f.match is None or any(f.match in a for a in rest)):
                 if f.times is not None:
@@ -232,13 +248,12 @@ class FakeRclone:
                 continue  # как rclone: отсутствующее в источнике молча пропускается
             left = self._broken.get(name, 0)
             if name in self._broken and (left is None or left > 0):
+                if left is not None:
+                    self._broken[name] = left - 1
                 errors.append(f"ERROR : {name}: Failed to copy: fake: связь оборвалась")
                 continue
             (dst / name).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(src / name, dst / name)
-        for name, left in list(self._broken.items()):
-            if left is not None and left > 0:
-                self._broken[name] = left - 1
         if errors:
             return RunResult(1, "", "\n".join([NOTICE, *errors, "ERROR : Attempt 3/3 failed"]) + "\n")
         return RunResult(0, "", NOTICE + "\n")

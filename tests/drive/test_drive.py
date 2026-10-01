@@ -376,7 +376,7 @@ def test_folder_id_missing_is_none(base, drive, fake):
     assert drive.folder_id(OUT) is None                          # запись без ID
 
 
-OUT = "MH_AUTO_НАЛИЧИЕ/2026/MH_1022_A/Фотографии/На выгрузку"
+OUT_A = "MH_AUTO_НАЛИЧИЕ/2026/MH_1022_A/Фотографии/На выгрузку"
 
 
 def test_pull_many_one_copy_with_transfers_and_cyrillic_names(base, drive, fake, tmp_path):
@@ -409,13 +409,13 @@ def test_push_many_one_copy_into_output_folder(base, drive, fake, tmp_path):
     for n in ("MH_1022_01.jpg", "MH_1022_02 b.jpg", "лишний.jpg"):
         (local / n).write_bytes(n.encode())
     before = len(fake.calls)
-    drive.push_many(local, ["MH_1022_01.jpg", "MH_1022_02 b.jpg"], OUT)
+    drive.push_many(local, ["MH_1022_01.jpg", "MH_1022_02 b.jpg"], OUT_A)
     assert sorted(p.name for p in (photos / "На выгрузку").iterdir()) == ["MH_1022_01.jpg", "MH_1022_02 b.jpg"]
     [call] = fake.calls[before:]
     assert call[1] == "copy" and call[call.index("--transfers") + 1] == "8"
     fake.fail_files("MH_1022_01.jpg", times=1)
     with pytest.raises(DriveError):
-        drive.push_many(local, ["MH_1022_01.jpg", "лишний.jpg"], OUT)
+        drive.push_many(local, ["MH_1022_01.jpg", "лишний.jpg"], OUT_A)
 
 
 @pytest.mark.parametrize(
@@ -423,11 +423,11 @@ def test_push_many_one_copy_into_output_folder(base, drive, fake, tmp_path):
     [
         ("MH_AUTO_НАЛИЧИЕ/2026/MH_1022_A/Фотографии", ["x.jpg"]),
         ("MH_AUTO_НАЛИЧИЕ/2026/MH_1022_A/Verkauf/На выгрузку", ["x.jpg"]),
-        (OUT, ["../x.jpg"]),
-        (OUT, ["sub/x.jpg"]),
-        (OUT, [".."]),
-        (OUT, ["x.jpg\nother.jpg"]),
-        (OUT, [""]),
+        (OUT_A, ["../x.jpg"]),
+        (OUT_A, ["sub/x.jpg"]),
+        (OUT_A, [".."]),
+        (OUT_A, ["x.jpg\nother.jpg"]),
+        (OUT_A, [""]),
     ],
 )
 def test_push_many_refused_before_rclone(drive, fake, tmp_path, remote_dir, names):

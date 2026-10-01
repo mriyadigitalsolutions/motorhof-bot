@@ -121,7 +121,7 @@ def test_rclone_failure_is_reported_with_redacted_stderr(base, fake, workdir, li
     from core.drive import Drive
     photos = make_car(base)
     make_jpeg(photos / "a.jpg", datetime(2026, 9, 1))
-    fake.fail("copyto", returncode=5, match="Фотографии/a.jpg",
+    fake.fail("copy", returncode=5, match="Фотографии",
               stderr="ERROR : a.jpg: Failed to copy: googleapi: Error 403: token SECRET-TOKEN-123 denied")
     d = Drive("motorhof", "MOTORHOF_AUTO", runner=fake, secrets=["SECRET-TOKEN-123"])
     with pytest.raises(job.JobError) as e:
@@ -190,7 +190,7 @@ def test_tmp_removed_after_success_and_after_error(base, fake, drive, workdir, l
     photos = make_car(base)
     make_jpeg(photos / "a.jpg", datetime(2026, 9, 1))
     make_jpeg(photos / "b.jpg", datetime(2026, 9, 2))
-    fake.fail("copyto", match="MH_1022_02.jpg", times=1)
+    fake.fail_files("MH_1022_02.jpg", times=1)
     with pytest.raises(job.JobError):
         job.run("MH_1022", listing, drive, workdir, None)
     assert list(workdir.iterdir()) == []
@@ -277,7 +277,7 @@ def test_upload_failure_keeps_uploaded_in_manifest(base, fake, drive, workdir, l
     photos = make_car(base)
     for i in range(3):
         make_jpeg(photos / f"p{i}.jpg", datetime(2026, 9, 1 + i), color=(10 * i, 50, 90))
-    fake.fail("copyto", match="MH_1022_03.jpg", times=1)
+    fake.fail_files("MH_1022_03.jpg", times=1)
     with pytest.raises(job.DriveFailed):
         job.run("MH_1022", listing, drive, workdir, None)
     assert pushed(fake)[-1] == "_manifest.json"
@@ -345,3 +345,101 @@ def test_link_on_first_and_repeat_run_without_extra_rclone_calls(base, fake, dri
     again = job.run("MH_1022", listing, drive, workdir, None)
     assert again.link == link
     assert len(fake.calls) <= 9 and len(id_lookups()) == 1
+
+
+def _calls_for(tmp_path, n: int) -> int:
+    from core.drive import Drive
+    from tests.conftest import ROOT
+    from tests.fakes.fake_rclone import FakeRclone
+    from modules.photos.convert import load_variants
+    base = tmp_path / f"drive{n}"
+    (base / ROOT).mkdir(parents=True)
+    photos = make_car(base)
+    for i in range(n):
+        make_jpeg(photos / f"Снимок {i:02d}.jpg", datetime(2026, 9, 1, 12, i))
+    fake = FakeRclone(base)
+    work = tmp_path / f"work{n}"
+    report = job.run("MH_1022", [load_variants()["listing"]], Drive("motorhof", ROOT, runner=fake), work, None)
+    assert report.done == n and len(list((photos / "На выгрузку").glob("*.jpg"))) == n
+    assert len(fake.commands("copy")) == 2  # одна пачка вниз, одна вверх
+    return len(fake.calls)
+
+
+def test_rclone_calls_do_not_grow_with_number_of_files(tmp_path):
+    assert _calls_for(tmp_path, 3) == _calls_for(tmp_path, 25)
+
+
+def test_download_batch_partly_failed_goes_to_errors_rest_done_rerun_finishes(base, fake, drive, workdir, listing):
+    photos = make_car(base)
+    for i in range(3):
+        make_jpeg(photos / f"p{i}.jpg", datetime(2026, 9, 1 + i), color=(10 * i, 50, 90))
+    fake.fail_files("p1.jpg", times=1)
+    report = job.run("MH_1022", listing, drive, workdir, None)
+    assert report.failed == [("p1.jpg", "не скачался с Drive, запусти /fotos ещё раз")]
+    assert report.status == "partial" and report.done == 2
+    out = photos / "На выгрузку"
+    manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+    assert {f["out"]: f["src"] for f in manifest["files"]} == {"MH_1022_01.jpg": "p0.jpg", "MH_1022_02.jpg": "p2.jpg"}
+    again = job.run("MH_1022", listing, drive, workdir, None)
+    assert (again.done, again.skipped, again.failed) == (1, 2, [])
+    manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+    assert sorted(f["src"] for f in manifest["files"]) == ["p0.jpg", "p1.jpg", "p2.jpg"]
+    assert sorted(p.name for p in out.iterdir()) == [
+        "MH_1022_01.jpg", "MH_1022_02.jpg", "MH_1022_03.jpg", "_manifest.json"]
+
+
+def test_known_source_not_downloaded_keeps_its_manifest_entry(base, fake, drive, workdir, listing):
+    """Исходник с номером (пересоздание удалённого руками JPEG) не скачался — ошибка, запись цела, не сирота."""
+    photos = make_car(base)
+    for i in range(2):
+        make_jpeg(photos / f"p{i}.jpg", datetime(2026, 9, 1 + i), color=(10 * i, 50, 90))
+    job.run("MH_1022", listing, drive, workdir, None)
+    out = photos / "На выгрузку"
+    (out / "MH_1022_01.jpg").unlink()
+    (out / "MH_1022_02.jpg").unlink()
+    fake.fail_files("p0.jpg", times=1)
+    report = job.run("MH_1022", listing, drive, workdir, None)
+    assert report.failed == [("p0.jpg", "не скачался с Drive, запусти /fotos ещё раз")] and report.orphans == []
+    assert report.done == 1 and (out / "MH_1022_02.jpg").exists()
+    manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+    assert {f["out"]: (f["src"], f["orphan"]) for f in manifest["files"]} == \
+        {"MH_1022_01.jpg": ("p0.jpg", False), "MH_1022_02.jpg": ("p1.jpg", False)}
+    again = job.run("MH_1022", listing, drive, workdir, None)
+    assert (again.done, again.skipped) == (1, 1) and (out / "MH_1022_01.jpg").exists()
+    assert sorted(p.name for p in out.iterdir()) == ["MH_1022_01.jpg", "MH_1022_02.jpg", "_manifest.json"]
+
+
+def test_upload_batch_partly_failed_manifest_has_only_landed_rerun_without_duplicates(base, fake, drive, workdir, listing):
+    """Пачка параллельная: упасть может и ранний файл при залитых поздних — в манифест только залитые."""
+    photos = make_car(base)
+    for i in range(3):
+        make_jpeg(photos / f"p{i}.jpg", datetime(2026, 9, 1 + i), color=(10 * i, 50, 90))
+    fake.fail_files("MH_1022_01.jpg", times=1)
+    with pytest.raises(job.DriveFailed):
+        job.run("MH_1022", listing, drive, workdir, None)
+    out = photos / "На выгрузку"
+    manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+    assert sorted(f["out"] for f in manifest["files"]) == ["MH_1022_02.jpg", "MH_1022_03.jpg"]
+    assert list(workdir.iterdir()) == []
+    fake.calls.clear()
+    again = job.run("MH_1022", listing, drive, workdir, None)
+    assert [n for n in pulled(fake) if n != "_manifest.json"] == ["p0.jpg"]
+    assert (again.done, again.skipped, again.failed) == (1, 2, [])
+    assert sorted(p.name for p in out.iterdir()) == [
+        "MH_1022_02.jpg", "MH_1022_03.jpg", "MH_1022_04.jpg", "_manifest.json"]
+
+
+def test_upload_batch_failed_rerender_keeps_old_entry(base, fake, drive, workdir, listing):
+    """Пересчёт под тем же именем (смена параметров) не залился — на Drive старый файл, в манифесте старая запись."""
+    from dataclasses import replace
+    photos = make_car(base)
+    make_jpeg(photos / "p0.jpg", datetime(2026, 9, 1))
+    job.run("MH_1022", listing, drive, workdir, None)
+    out = photos / "На выгрузку"
+    old = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
+    sharper = [replace(listing[0], quality=listing[0].quality - 5)]
+    fake.fail_files("MH_1022_01.jpg", times=1)
+    with pytest.raises(job.DriveFailed):
+        job.run("MH_1022", sharper, drive, workdir, None)
+    assert json.loads((out / "_manifest.json").read_text(encoding="utf-8"))["files"] == old["files"]
+    assert job.run("MH_1022", sharper, drive, workdir, None).done == 1

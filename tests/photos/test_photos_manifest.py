@@ -186,3 +186,30 @@ def test_dng_made_before_embedded_preview_rerendered_heic_kept(tmp_path):
     assert [(i.source.name, i.out_name) for i in plan.to_render] == [("A.DNG", "MH_1022_01.jpg")]
     m.apply(plan.to_render)
     assert m.plan(sources, [LISTING], outs).to_render == []
+
+
+
+def test_jpeg_named_dng_converted_once_rerun_renders_nothing(tmp_path):
+    """Таск 15: .DNG с JPEG внутри конвертируется как JPEG; повторный прогон ничего не пересчитывает."""
+    from modules.photos.convert import to_jpeg
+    from modules.photos.manifest import sha256_file
+    from tests.photos.conftest import make_jpeg
+
+    srcdir, outdir = tmp_path / "src", tmp_path / "out"
+    outdir.mkdir()
+    jpg = make_jpeg(srcdir / "tmp.jpg", taken=datetime(2026, 8, 11, 18, 52, 18))
+    dng = srcdir / "IMG_3729.DNG"
+    jpg.rename(dng)
+    sources = [Source(name=dng.name, sha256=sha256_file(dng), taken=datetime(2026, 8, 11, 18, 52, 18))]
+
+    def render(item):
+        to_jpeg(srcdir / item.source.name, item.variant, outdir / item.out_name)
+
+    m = Manifest.load(None, mh="MH_1016")
+    ex = m.execute(sources, [LISTING], set(), render)
+    assert ex.errors == [] and [i.out_name for i in ex.done] == ["MH_1016_01.jpg"]
+    path = tmp_path / "_manifest.json"
+    m.dump(path)
+    again = Manifest.load(path, mh="MH_1016").execute(
+        sources, [LISTING], {p.name for p in outdir.iterdir()}, render)
+    assert again.done == [] and len(again.first_plan.skipped) == 1
