@@ -7,9 +7,13 @@
 друг друга не импортируют. Порядок и активность кнопок переопределяет `modules.MENU`
 (`Menu.configure`); ядро имён модулей не знает. Решение — docs/adr/0008-menu-registry.md.
 
-Нажатие кнопки приходит обычным текстом с её подписью. Подписи кнопок меню уникальны и не
-совпадают со служебными «Назад», «Отмена», «Выполнить» (`validate`), поэтому кнопка
-находится по подписи без сохранённого состояния — и после перезапуска бота. Текущий экран
+Нажатие кнопки приходит обычным текстом с её подписью: «значок название» (`icon`), сравнение —
+по `normalize_label`, без ведущего значка, так что и подпись старой клавиатуры без значка
+находит кнопку. Нормализованные подписи кнопок меню уникальны и не совпадают со служебными
+«Назад», «Отмена», «Выполнить» (`validate`), поэтому кнопка находится по подписи без
+сохранённого состояния — и после перезапуска бота. Ряды — `core.dialog.layout`: по две
+кнопки, «Назад» снизу (одна кнопка на экране — с «Назад» в одном ряду). Текст экрана — без
+значка. Текущий экран
 (ключ "screen" в данных FSM, пара chat_id + user_id) нужен только «Назад»: без него —
 главное меню. В группе ответ — reply на сообщение партнёра, клавиатура `selective`:
 Telegram показывает её только ему. Старые inline-кнопки `m:…` отвечают «Кнопка устарела».
@@ -26,7 +30,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import (CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup,
                            ReplyParameters)
 
-from core.dialog import BACK_LABEL, CANCEL_LABEL, RUN_LABEL, Context, Dialog, normalize_label
+from core.dialog import (BACK_LABEL, CANCEL_LABEL, RUN_LABEL, Context, Dialog, layout,
+                         normalize_label)
 
 ROOT = "root"
 ROOT_TITLE = "Главное меню"
@@ -37,7 +42,7 @@ EMPTY = "Здесь пока ничего нет"
 UNKNOWN = "Кнопка устарела, открой /menu"
 BACK = BACK_LABEL
 SCREEN_KEY = "screen"
-SERVICE_LABELS = {BACK_LABEL, CANCEL_LABEL, RUN_LABEL}
+SERVICE_LABELS = {normalize_label(x) for x in (BACK_LABEL, CANCEL_LABEL, RUN_LABEL)}
 GROUP_TYPES = {"group", "supergroup"}
 
 _ID = re.compile(r"^[a-z0-9_]{1,20}$")
@@ -61,6 +66,17 @@ class Node:
     handler: Handler | None = None
     text: str | None = None
     seq: int = 0  # порядок объявления: при равном order кнопки идут так, как их объявили
+    icon: str = ""  # значок перед подписью на кнопке; в тексте экрана его нет
+
+    @property
+    def label(self) -> str:
+        """Подпись на кнопке: «значок название» или просто название."""
+        return f"{self.icon} {self.title}" if self.icon else self.title
+
+    @property
+    def key(self) -> str:
+        """Подпись для сравнения (normalize_label): без значка."""
+        return normalize_label(self.label)
 
 
 @dataclass
@@ -109,25 +125,28 @@ class Menu:
         return ModuleMenu(self, module)
 
     def section(self, id: str, title: str, *, module: str, parent: str = ROOT,
-                order: int = 100, enabled: bool = True, text: str | None = None) -> Node:
+                order: int = 100, enabled: bool = True, text: str | None = None,
+                icon: str = "") -> Node:
         _check_id(id, "экран")
+        _check_icon(icon, id)
         if id == ROOT or id in self._sections:
             raise ValueError(f"экран {id!r} уже объявлен")
         node = Node("section", id, title, parent, order, enabled, module, text=text,
-                    seq=self._next_seq())
+                    seq=self._next_seq(), icon=icon)
         self._sections[id] = node
         return node
 
     def action(self, id: str, title: str, *, module: str, parent: str, order: int = 100,
                enabled: bool = True, dialog: Dialog | None = None,
-               handler: Handler | None = None) -> Node:
+               handler: Handler | None = None, icon: str = "") -> Node:
         _check_id(id, "кнопка")
+        _check_icon(icon, f"{module}:{id}")
         if (dialog is None) == (handler is None):
             raise ValueError(f"кнопка {module}:{id}: нужен ровно один из dialog или handler")
         if (module, id) in self._actions:
             raise ValueError(f"кнопка {module}:{id} уже объявлена")
         node = Node("action", id, title, parent, order, enabled, module, dialog, handler,
-                    seq=self._next_seq())
+                    seq=self._next_seq(), icon=icon)
         self._actions[(module, id)] = node
         return node
 
@@ -138,7 +157,7 @@ class Menu:
 
     def validate(self) -> None:
         """Дерево собрано без ошибок: родители существуют и это экраны, циклов нет, подписи
-        кнопок уникальны и не служебные (кнопка ищется по подписи).
+        кнопок (нормализованные, без значков) уникальны и не служебные (кнопка ищется по подписи).
         Зовётся после регистрации модулей — опечатка в parent не даёт боту стартовать."""
         for node in self._nodes():
             if node.parent != ROOT and node.parent not in self._sections:
@@ -155,12 +174,14 @@ class Menu:
                 raise ValueError(f"modules.MENU: {key!r} не объявлен ни одним модулем")
         seen_labels: dict[str, Node] = {}
         for node in self._nodes():
-            if node.title in SERVICE_LABELS:
-                raise ValueError(f"{_name(node)}: подпись {node.title!r} занята диалогом")
-            if node.title in seen_labels:
-                raise ValueError(f"{_name(node)}: подпись {node.title!r} уже у "
-                                 f"{_name(seen_labels[node.title])}")
-            seen_labels[node.title] = node
+            if not node.key:
+                raise ValueError(f"{_name(node)}: пустая подпись")
+            if node.key in SERVICE_LABELS:
+                raise ValueError(f"{_name(node)}: подпись {node.label!r} занята диалогом")
+            if node.key in seen_labels:
+                raise ValueError(f"{_name(node)}: подпись {node.label!r} уже у "
+                                 f"{_name(seen_labels[node.key])}")
+            seen_labels[node.key] = node
 
     # --- чтение -------------------------------------------------------------
     def _nodes(self) -> list[Node]:
@@ -185,19 +206,17 @@ class Menu:
         else:
             node = self._sections[section_id]
             title, back = node.text or node.title, True
-        rows: Rows = [[n.title] for n in self.children(section_id)]
-        if not rows and section_id != ROOT:
+        buttons = [n.label for n in self.children(section_id)]
+        if not buttons and section_id != ROOT:
             title = f"{title}\n\n{EMPTY}"
-        if back:
-            rows.append([BACK])
-        return Screen(title, rows)
+        return Screen(title, layout(buttons, [BACK] if back else []))
 
     def has_screen(self, section_id: str | None) -> bool:
         return section_id == ROOT or section_id in self._sections
 
     def labels(self) -> set[str]:
-        """Подписи, которые меню считает нажатием своей кнопки."""
-        return {n.title for n in self._nodes()} | {BACK}
+        """Подписи (нормализованные), которые меню считает нажатием своей кнопки."""
+        return {n.key for n in self._nodes()} | {normalize_label(BACK)}
 
     def is_label(self, text: str | None) -> bool:
         """Текст — нажатие кнопки меню (сравнение по normalize_label, как в диалоге)."""
@@ -207,12 +226,12 @@ class Menu:
         """Нажатие кнопки нижней клавиатуры (текст подписи) → что показать или сделать.
         current_screen — экран из FSM, нужен только «Назад»; неизвестен → главное меню."""
         label = normalize_label(label)
-        if label == BACK:
+        if label == normalize_label(BACK):
             parent = ROOT
             if current_screen in self._sections:
                 parent = self._sections[current_screen].parent
             return Press("screen", parent, self.screen(parent))
-        node = next((n for n in self._nodes() if n.title == label), None)
+        node = next((n for n in self._nodes() if n.key == label), None)
         if node is None:
             return Press("none")
         if not self.enabled(node) or not self._parents_enabled(node):
@@ -248,6 +267,13 @@ class ModuleMenu:
 def _check_id(value: str, what: str) -> None:
     if not _ID.match(value or ""):
         raise ValueError(f"{what} {value!r}: только a-z, 0-9, _ (до 20 символов)")
+
+
+def _check_icon(icon: str, where: str) -> None:
+    """Значок — только символы, которые normalize_label срезает: иначе подпись старой
+    клавиатуры без значка не нашла бы кнопку."""
+    if icon and (icon != icon.strip() or normalize_label(icon + " x") != "x"):
+        raise ValueError(f"{where}: значок {icon!r} — только эмодзи/символы, без букв и пробелов")
 
 
 def _name(node: Node) -> str:

@@ -8,18 +8,22 @@
 Кнопки диалога — нижняя клавиатура Telegram: нажатие приходит обычным текстом с подписью.
 `Engine.text` узнаёт служебные подписи («Назад» — шаг назад, «Отмена», «Выполнить» на экране
 подтверждения) и подписи вариантов текущего шага, остальное — свободный текст через validate.
+На кнопках разрешены значки («⬅️ Назад»), сравнение подписей — без них (`normalize_label`):
+подпись старой клавиатуры без значка совпадает с новой. Ряды кнопок раскладывает `layout` —
+одна функция для меню и диалога.
 """
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable, Sequence, Union
 
 TIMEOUT = timedelta(minutes=10)
 
-CANCEL_LABEL = "Отмена"
-BACK_LABEL = "Назад"
-RUN_LABEL = "Выполнить"
+CANCEL_LABEL = "✖️ Отмена"
+BACK_LABEL = "⬅️ Назад"
+RUN_LABEL = "✅ Выполнить"
 CANCELLED = "Отменено"
 EXPIRED = "Диалог закрыт: 10 минут без ответа. Начни заново из /menu."
 STALE = "Этот диалог уже закрыт"
@@ -28,9 +32,36 @@ CONFIRM_TITLE = "Что будет сделано:"
 Values = dict[str, Any]
 
 
+# Категории Unicode, которые срезаются в начале подписи: значки (So, Sk — эмодзи, модификатор
+# тона), вариационные селекторы и комбинирующие знаки (Mn, Me), ZWJ (Cf), пробелы (Zs).
+# Буквы, цифры, «+», «-» и прочая пунктуация остаются: «+ полноразмерные» — сама с собой.
+_ICON_CATEGORIES = {"So", "Sk", "Mn", "Me", "Cf", "Zs"}
+
+
 def normalize_label(text: str | None) -> str:
-    """Единое правило сравнения текста с подписью кнопки (меню и диалог): без пробелов по краям."""
-    return (text or "").strip()
+    """Единое правило сравнения текста с подписью кнопки (меню и диалог): без пробелов по краям
+    и без ведущих значков. «📁 Google Drive» и «Google Drive», «⬅️ Назад» и «Назад» совпадают;
+    значок в середине или в конце, регистр и «+» не трогаются."""
+    text = (text or "").strip()
+    i = 0
+    while i < len(text) and (text[i].isspace()
+                             or unicodedata.category(text[i]) in _ICON_CATEGORIES):
+        i += 1
+    return text[i:]
+
+
+def layout(buttons: Sequence[str], nav: Sequence[str] = ()) -> list[list[str]]:
+    """Ряды нижней клавиатуры (меню и диалог): кнопки по две в ряд, нечётная последняя — одна
+    на всю ширину; служебные nav («Назад», «Отмена») — отдельной нижней строкой. Исключение:
+    одна кнопка и одна служебная («Назад» на экране меню) — в одном ряду. «Выполнить» —
+    обычная кнопка: на экране подтверждения она одна над «Назад» · «Отмена»."""
+    buttons, nav = list(buttons), list(nav)
+    if len(buttons) == 1 and len(nav) == 1:
+        return [buttons + nav]
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    if nav:
+        rows.append(nav)
+    return rows
 
 
 class Invalid(Exception):
@@ -155,24 +186,25 @@ class Engine:
             return closed
         label = normalize_label(text)
         idx = session["step"]
-        if label == CANCEL_LABEL:
+        if label == normalize_label(CANCEL_LABEL):
             return Outcome("closed", CANCELLED)
-        if label == BACK_LABEL:
+        if label == normalize_label(BACK_LABEL):
             if idx == 0:
                 return Outcome("closed", CANCELLED)
             return self._show(d, self._touch(dict(session, step=idx - 1), now))
         if idx >= len(d.steps):  # экран подтверждения ждёт «Выполнить»
-            if label == RUN_LABEL:
+            if label == normalize_label(RUN_LABEL):
                 return Outcome("finish", values=dict(session["values"]), dialog=d.id)
             return self._show(d, session, note="Нажми «Выполнить» или «Отмена».")
         step = d.steps[idx]
         for choice in step.options(session["values"]):
-            if choice.label == label:
+            if normalize_label(choice.label) == label:
                 return self._advance(d, session, step.name, choice.value, now)
         if step.validate is None:
             return self._show(d, session, note="Выбери вариант кнопкой.")
         try:
-            value = step.validate(label, dict(session["values"]))
+            # свободный текст — без пробелов по краям, но с ведущими знаками («+43 …»)
+            value = step.validate((text or "").strip(), dict(session["values"]))
         except Invalid as e:
             return self._show(d, session, note=e.text)
         return self._advance(d, session, step.name, value, now)
@@ -204,12 +236,11 @@ class Engine:
         nav = [BACK_LABEL, CANCEL_LABEL]
         if idx >= len(d.steps):
             text = CONFIRM_TITLE + "\n" + d.confirm(values)
-            rows = [[RUN_LABEL], nav]
+            rows = layout([RUN_LABEL], nav)
         else:
             step = d.steps[idx]
             text = step.text(values)
-            rows = [[c.label] for c in step.options(values)]
-            rows.append(nav)
+            rows = layout([c.label for c in step.options(values)], nav)
         if note:
             text = f"{note}\n\n{text}"
         return Outcome("ask", text, rows, session=session)

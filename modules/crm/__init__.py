@@ -5,8 +5,9 @@
 from __future__ import annotations
 
 MODULE = "crm"
+ICON = "🗂"
 
 
 def register(router, queue, *, menu=None, **_: object) -> None:
     if menu is not None:
-        menu.section(MODULE, "CRM")
+        menu.section(MODULE, "CRM", icon=ICON)

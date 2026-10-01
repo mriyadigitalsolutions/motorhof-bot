@@ -17,12 +17,14 @@ from .convert import Variant, load_variants
 PARENT = "drive"
 ACTION = "convert"
 TITLE = "Форматировать фото"
+ICON = "📸"
 DIALOG_ID = "photos_convert"
 ASK_CODE = "Номер машины: MH_1022, mh1022 или KO_2001"
 ASK_VARIANTS = "Какие JPEG сделать?"
 ONLY_CODE = "Только номер, без слов после него"
-BASE_LABEL = "Обычные"
-EXTRA_LABELS = {"full": "Обычные и полноразмерные"}
+# подписи вариантов на кнопках (значок + название); сравнение без значка — core.dialog.normalize_label
+BASE_LABEL = "🖼 Обычные"
+EXTRA_LABELS = {"full": "🔍 + полноразмерные"}
 
 
 def validate_code(text: str, values: dict) -> str:
@@ -42,7 +44,7 @@ def make_dialog(queue: JobQueue,
     def choices(values: dict) -> list[Choice]:
         extra = [v.name for v in variants_loader().values() if v.on_demand]
         return [Choice(BASE_LABEL, [])] + [
-            Choice(EXTRA_LABELS.get(name, f"{BASE_LABEL} и {name}"), [name]) for name in extra]
+            Choice(EXTRA_LABELS.get(name, f"+ {name}"), [name]) for name in extra]
 
     def confirm(values: dict) -> str:
         what = "JPEG для объявлений"
@@ -63,4 +65,5 @@ def make_dialog(queue: JobQueue,
 
 def publish(menu, queue: JobQueue) -> None:
     """Кнопка в чужом экране: экран drive объявляет модуль drive, photos его не импортирует."""
-    menu.action(ACTION, TITLE, parent=PARENT, order=10, dialog=make_dialog(queue))
+    menu.action(ACTION, TITLE, parent=PARENT, order=10, icon=ICON,
+                dialog=make_dialog(queue))
