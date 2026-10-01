@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image, ImageCms, ImageStat
@@ -154,45 +155,118 @@ def test_dng_brightness_matches_embedded_iphone_jpeg(tmp_path):
     assert abs(got - EMBEDDED_BRIGHTNESS) <= 0.15 * EMBEDDED_BRIGHTNESS
 
 
+class FakePreview:
+    """Настоящий DNG (rawpy), у которого подменено только вшитое превью (extract_thumb)."""
+
+    def __init__(self, raw, extract_thumb):
+        self._raw, self.extract_thumb = raw, extract_thumb
+
+    def __getattr__(self, name):
+        return getattr(self._raw, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._raw.close()
+
+
+def fake_preview(monkeypatch, extract_thumb):
+    import rawpy
+
+    real_imread = rawpy.imread
+    monkeypatch.setattr(rawpy, "imread", lambda path: FakePreview(real_imread(path), extract_thumb))
+
+
+def jpeg_data(img: Image.Image) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=95)
+    return buf.getvalue()
+
+
+def dng_with_orientation(tmp_path: Path, orientation: int) -> Path:
+    """Копия фикстуры DNG с другим Orientation в IFD0 (TIFF big-endian, тег 0x0112, SHORT)."""
+    data = bytearray(DNG_FIXTURE.read_bytes())
+    assert data[:2] == b"MM"
+    ifd = int.from_bytes(data[4:8], "big")
+    for i in range(int.from_bytes(data[ifd:ifd + 2], "big")):
+        entry = ifd + 2 + 12 * i
+        if int.from_bytes(data[entry:entry + 2], "big") == 0x0112:
+            data[entry + 8:entry + 10] = orientation.to_bytes(2, "big")
+            break
+    else:
+        raise AssertionError("в IFD0 фикстуры нет Orientation")
+    path = tmp_path / f"IMG_O{orientation}.DNG"
+    path.write_bytes(data)
+    return path
+
+
 @needs_dng
 @pytest.mark.parametrize("thumb", ["missing", "bitmap", "small", "broken"])
 def test_dng_without_usable_preview_falls_back_to_rawpy_auto_bright(tmp_path, monkeypatch, thumb):
     import rawpy
 
-    small = io.BytesIO()
-    Image.new("RGB", (1008, 756), (128, 128, 128)).save(small, "JPEG")
-    fakes = {"bitmap": (rawpy.ThumbFormat.BITMAP, b""), "small": (rawpy.ThumbFormat.JPEG, small.getvalue()),
-             "broken": (rawpy.ThumbFormat.JPEG, b"\xff\xd8\xff\xe0 not a jpeg")}
+    previews = {
+        "bitmap": SimpleNamespace(format=rawpy.ThumbFormat.BITMAP, data=b""),
+        "small": SimpleNamespace(format=rawpy.ThumbFormat.JPEG,
+                                 data=jpeg_data(Image.new("RGB", (1008, 756), (128, 128, 128)))),
+        "broken": SimpleNamespace(format=rawpy.ThumbFormat.JPEG, data=b"\xff\xd8\xff\xe0 not a jpeg"),
+    }
 
-    class NoPreview:
-        """Настоящий DNG, у которого подменено только вшитое превью."""
+    def extract_thumb():
+        if thumb == "missing":
+            raise rawpy.LibRawNoThumbnailError()
+        return previews[thumb]
 
-        def __init__(self, raw):
-            self._raw = raw
-
-        def __getattr__(self, name):
-            return getattr(self._raw, name)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            self._raw.close()
-
-        def extract_thumb(self):
-            if thumb == "missing":
-                raise rawpy.LibRawNoThumbnailError()
-            fmt, data = fakes[thumb]
-            return rawpy._rawpy.Thumbnail(fmt, data)
-
-    real_imread = rawpy.imread
-    monkeypatch.setattr(rawpy, "imread", lambda path: NoPreview(real_imread(path)))
+    fake_preview(monkeypatch, extract_thumb)
     dst = tmp_path / "MH_1022_02.jpg"
     to_jpeg(DNG_FIXTURE, LISTING, dst)
     with Image.open(dst) as out:
         assert out.size == (2000, 1500)
         assert out.getexif().get(0x0110) == "iPhone 13 Pro Max"
     assert mean_brightness(dst) >= 60
+
+
+@needs_dng
+@pytest.mark.parametrize("orientation, size, red_at", [
+    (1, (2000, 1500), "left"),     # без поворота
+    (6, (1500, 2000), "top"),      # 90° по часовой: левый край кадра уходит наверх
+    (8, (1500, 2000), "bottom"),   # 90° против часовой: левый край кадра уходит вниз
+])
+def test_dng_preview_rotated_by_dng_orientation(tmp_path, monkeypatch, orientation, size, red_at):
+    import rawpy
+
+    # Превью как кадр RAW (4032×3024, без поворота): левая половина красная, правая синяя.
+    stored = Image.new("RGB", (4032, 3024), (0, 0, 255))
+    stored.paste((255, 0, 0), (0, 0, 2016, 3024))
+    preview = SimpleNamespace(format=rawpy.ThumbFormat.JPEG, data=jpeg_data(stored))
+    fake_preview(monkeypatch, lambda: preview)
+    dst = tmp_path / "MH_1022_01.jpg"
+    to_jpeg(dng_with_orientation(tmp_path, orientation), LISTING, dst)
+    with Image.open(dst) as out:
+        assert out.size == size
+        assert out.getexif().get(0x0112) == 1
+        w, h = out.size
+        probe = {"left": (w // 4, h // 2), "top": (w // 2, h // 4), "bottom": (w // 2, h * 3 // 4)}
+        r, _, b = out.convert("RGB").getpixel(probe[red_at])
+    assert r > 200 and b < 60
+
+
+@needs_dng
+def test_dng_preview_already_rotated_is_not_rotated_again(tmp_path, monkeypatch):
+    import rawpy
+
+    # Превью уже портретное при Orientation=6: верх красный — так и остаётся.
+    stored = Image.new("RGB", (3024, 4032), (0, 0, 255))
+    stored.paste((255, 0, 0), (0, 0, 3024, 2016))
+    preview = SimpleNamespace(format=rawpy.ThumbFormat.JPEG, data=jpeg_data(stored))
+    fake_preview(monkeypatch, lambda: preview)
+    dst = tmp_path / "MH_1022_01.jpg"
+    to_jpeg(dng_with_orientation(tmp_path, 6), LISTING, dst)
+    with Image.open(dst) as out:
+        assert out.size == (1500, 2000)
+        r, _, b = out.convert("RGB").getpixel((750, 500))
+    assert r > 200 and b < 60
 
 
 @pytest.mark.parametrize("kind", ["empty", "truncated_jpg", "truncated_heic", "truncated_dng"])

@@ -158,19 +158,17 @@ def _check_isobmff(src: Path) -> None:
             pos += box
 
 
-# EXIF Orientation → преобразование (та же таблица, что в ImageOps.exif_transpose).
-_ORIENTATION = {
-    2: Image.Transpose.FLIP_LEFT_RIGHT, 3: Image.Transpose.ROTATE_180,
-    4: Image.Transpose.FLIP_TOP_BOTTOM, 5: Image.Transpose.TRANSPOSE,
-    6: Image.Transpose.ROTATE_270, 7: Image.Transpose.TRANSVERSE, 8: Image.Transpose.ROTATE_90,
-}
+# Orientation, при которых кадр поворачивается на 90° (оси меняются местами).
+_SWAPS_AXES = {5, 6, 7, 8}
 
 
 def _embedded_jpeg(raw, orientation: int | None) -> Image.Image | None:
     """Полноразмерный JPEG, вшитый iPhone в DNG, или None (нет, не JPEG, меньше кадра, битый).
 
-    Пиксели вшитого снимка лежат так же, как кадр RAW; поворот — по Orientation самого DNG
-    (EXIF, который LibRaw приклеивает к превью, не используется).
+    По спецификации DNG превью в IFD0 лежит так же, как кадр RAW (raw.sizes — без поворота),
+    и Orientation DNG относится и к нему; поворот — по Orientation самого DNG (EXIF, который
+    LibRaw приклеивает к превью, не используется). Если превью при повороте на 90° уже
+    повёрнуто (его оси не совпадают с осями кадра RAW), второй раз не поворачиваем.
     """
     import rawpy
 
@@ -190,8 +188,12 @@ def _embedded_jpeg(raw, orientation: int | None) -> Image.Image | None:
             img = im.convert("RGB") if im.mode != "RGB" else im.copy()
     except Exception:  # noqa: BLE001 — битое превью: запасной путь
         return None
-    if orientation in _ORIENTATION:
-        img = img.transpose(_ORIENTATION[orientation])
+    frame_landscape = sizes.width >= sizes.height
+    already_rotated = (orientation in _SWAPS_AXES
+                       and (img.width >= img.height) != frame_landscape)
+    if orientation and orientation != 1 and not already_rotated:
+        img.getexif()[exif_mod.ORIENTATION] = orientation
+        img = ImageOps.exif_transpose(img)  # таблица поворотов — одна, Pillow
     if icc:
         img.info["icc_profile"] = icc
     return img
@@ -204,9 +206,10 @@ def _decode_dng(src: Path) -> tuple[Image.Image, Image.Exif | None]:
     with Image.open(src) as tiff:  # EXIF из TIFF-структуры DNG
         ex = _load_exif(tiff)
     with rawpy.imread(str(src)) as raw:
-        # Целостность файла: обрезанный DNG (данные RAW не дочитываются) — нечитаемый,
-        # даже если превью в его начале цело.
-        raw.raw_image  # noqa: B018 — чтение данных RAW, ошибка LibRaw → ConvertError выше
+        # Проверка целостности: данные RAW распаковываются, даже когда пиксели берутся из
+        # превью. Превью лежит в начале файла и цело в обрезанном DNG; без распаковки такой
+        # файл не считался бы повреждённым (история про битые исходники). Цена ~0.9 с на DNG.
+        raw.raw_image  # noqa: B018 — ошибка LibRaw → ConvertError в to_jpeg
         img = _embedded_jpeg(raw, ex.get(exif_mod.ORIENTATION) if ex is not None else None)
         if img is not None:
             return _to_srgb(img), ex
