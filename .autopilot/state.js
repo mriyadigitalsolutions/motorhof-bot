@@ -11,7 +11,7 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-10-01T16:48:00+00:00",
-  "updatedAt": "2026-10-01T17:02:21+00:00",
+  "updatedAt": "2026-10-01T17:05:44+00:00",
   "finishedAt": null,
   "stages": [
     {
@@ -46,24 +46,28 @@ window.STATE =
     },
     {
       "id": "build",
-      "status": "active",
+      "status": "done",
       "startedAt": "2026-10-01T16:51:03+00:00",
-      "note": "таск 01 на ревью"
+      "note": "1 из 1 таска готов",
+      "finishedAt": "2026-10-01T17:05:44+00:00"
     },
     {
       "id": "review",
-      "status": "active",
-      "startedAt": "2026-10-01T16:58:39+00:00"
+      "status": "done",
+      "startedAt": "2026-10-01T16:58:39+00:00",
+      "finishedAt": "2026-10-01T17:05:44+00:00",
+      "note": "2 оси + Craft; 1 дозапрос (4 находки), повторное ревью чистое"
     },
     {
       "id": "final",
-      "status": "pending"
+      "status": "active",
+      "startedAt": "2026-10-01T17:05:44+00:00"
     }
   ],
   "requirements": {
     "total": 9,
-    "done": 0,
-    "inTicket": 9,
+    "done": 9,
+    "inTicket": 0,
     "inSpec": 0,
     "placeholder": 0,
     "deferred": 0,
@@ -96,7 +100,7 @@ window.STATE =
         "docs/adr/",
         "README.md"
       ],
-      "status": "repair",
+      "status": "done",
       "startedAt": "2026-10-01T16:51:03+00:00",
       "retries": 0,
       "repairs": 1,
@@ -106,11 +110,21 @@ window.STATE =
         "таймаут + «Назад» обрабатывается дважды",
         "/cancel без диалога без reply в группе",
         "разная нормализация подписи"
-      ]
+      ],
+      "finishedAt": "2026-10-01T17:05:44+00:00",
+      "commit": "6320bbd",
+      "tests": {
+        "passed": 447,
+        "failed": 0
+      },
+      "files": 13
     }
   ],
   "singlePass": null,
-  "tests": null,
+  "tests": {
+    "passed": 447,
+    "failed": 0
+  },
   "debt": {
     "placeholders": [],
     "assumptions": [],
