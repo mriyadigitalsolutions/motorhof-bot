@@ -1,7 +1,7 @@
 window.STATE =
 {
   "slug": "motorhof-bot-photos",
-  "dir": "2026-09-30-motorhof-bot-photos--wip",
+  "dir": "2026-09-30-motorhof-bot-photos",
   "title": "MOTORHOF: Telegram-бот, модуль photos",
   "mode": "interview",
   "depth": "deep",
@@ -11,8 +11,8 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-10-01T09:42:41+00:00",
-  "finishedAt": null,
+  "updatedAt": "2026-10-01T09:46:58+00:00",
+  "finishedAt": "2026-10-01T09:46:58+00:00",
   "stages": [
     {
       "id": "preflight",
@@ -47,25 +47,29 @@ window.STATE =
     },
     {
       "id": "build",
-      "status": "active",
+      "status": "done",
       "startedAt": "2026-09-30T21:12:54+00:00",
-      "note": "дополнение: таск 13 (OAuth-клиент)"
+      "note": "дополнение: таск 13 (OAuth-клиент)",
+      "finishedAt": "2026-10-01T09:46:58+00:00"
     },
     {
       "id": "review",
-      "status": "active",
+      "status": "done",
       "startedAt": "2026-09-30T21:21:04+00:00",
-      "note": "дополнение: таск 13 (OAuth-клиент)"
+      "note": "дополнение: таск 13 (OAuth-клиент)",
+      "finishedAt": "2026-10-01T09:46:58+00:00"
     },
     {
       "id": "final",
-      "status": "pending",
-      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)"
+      "status": "done",
+      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)",
+      "startedAt": "2026-10-01T09:46:58+00:00",
+      "finishedAt": "2026-10-01T09:46:58+00:00"
     }
   ],
   "requirements": {
     "total": 60,
-    "done": 59,
+    "done": 60,
     "inTicket": 0,
     "inSpec": 0,
     "placeholder": 0,
@@ -543,16 +547,21 @@ window.STATE =
         "README.md",
         "docs/adr/"
       ],
-      "status": "in-progress",
+      "status": "done",
       "startedAt": "2026-10-01T09:42:41+00:00",
       "retries": 0,
       "repairs": 0,
-      "handoffs": 0
+      "handoffs": 0,
+      "finishedAt": "2026-10-01T09:46:58+00:00",
+      "tests": {
+        "passed": 320,
+        "failed": 0
+      }
     }
   ],
   "singlePass": null,
   "tests": {
-    "passed": 319,
+    "passed": 320,
     "failed": 0,
     "skipped": 1
   },
