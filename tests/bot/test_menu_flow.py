@@ -263,3 +263,22 @@ async def test_old_dng_buttons_still_reach_photos(app, tg):
     """Кнопки ph:… не перехватываются меню."""
     await Chat_(app, tg).press("ph:keep:999", message_id=1)
     assert "Кнопка устарела, открой /menu" not in alerts(tg)
+
+
+async def test_real_main_menu_has_crm_inactive_and_drive(tmp_path):
+    """Приёмка фазы A: /menu даёт две кнопки, CRM неактивна, в Google Drive — фото."""
+    settings = load_settings({"ALLOWED_TELEGRAM_IDS": f"{ANNA}", "ADMIN_TELEGRAM_IDS": "",
+                              "DB_PATH": str(tmp_path / "db.sqlite"),
+                              "TMP_DIR": str(tmp_path / "tmp")})
+    app = bot_main.build(settings)
+    try:
+        tg = ChatBot()
+        anna = Chat_(app, tg)
+        await anna.say("/menu")
+        assert screens(tg)[-1] == ("Главное меню", ["CRM", "Google Drive"])
+        await anna.press("m:menu:open:crm")
+        assert alerts(tg) == ["В разработке"]
+        await anna.press("m:menu:open:drive")
+        assert screens(tg)[-1][0].startswith("Google Drive") and screens(tg)[-1][1][-1] == "Назад"
+    finally:
+        app.db.close()

@@ -13,10 +13,15 @@ from types import ModuleType
 from typing import Any, Iterable
 
 ENABLED: list[str] = [
+    "crm",
+    "drive",
     "photos",
 ]
 
-MENU: dict[str, dict[str, Any]] = {}
+MENU: dict[str, dict[str, Any]] = {
+    "crm": {"order": 10, "enabled": False},
+    "drive": {"order": 20},
+}
 
 
 def register_all(router, queue, names: Iterable[str] | None = None, *, menu=None,
