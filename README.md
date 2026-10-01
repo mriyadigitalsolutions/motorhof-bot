@@ -4,7 +4,10 @@ Telegram-бот MOTORHOF OG. Один Python-процесс в одном Docker
 очередь задач (одна задача за раз) и планировщик. Состояние — SQLite в `./data`. Google Drive —
 только через `rclone` (общий диск Workspace `office@motorhof.at`, remote `motorhof`).
 
-Первый модуль — **photos**: партнёр пишет `/fotos MH_1022`, бот находит папку машины на Drive,
+Управление — меню на кнопках (`/menu`): «CRM» (пока неактивна) и «Google Drive» с подкомандами;
+быстрые текстовые команды делают то же, минуя меню.
+
+Первый модуль — **photos** (кнопка «Форматировать фото» в «Google Drive»): партнёр пишет `/fotos MH_1022`, бот находит папку машины на Drive,
 конвертирует DNG/HEIC/JPG из `Фотографии/` в JPEG и кладёт их в `Фотографии/На выгрузку/`
 (`MH_1022_01.jpg`, …), отвечает ссылкой. Повторный запуск делает только новое (манифест
 `_manifest.json` в `На выгрузку/`).
@@ -14,12 +17,17 @@ Telegram-бот MOTORHOF OG. Один Python-процесс в одном Docker
 ## Структура
 
 ```
-bot/            main.py (точка входа python -m bot.main), auth.py (партнёры и админ), router.py (/start /help /status /last)
-core/           общее для всех модулей: settings.py (.env), log.py (логи без секретов), db.py (SQLite),
-                queue.py (очередь, воркер, ежедневное расписание), drive.py (обёртка над rclone)
-modules/        __init__.py — список включённых модулей (ENABLED)
-  photos/       /fotos: handlers.py, job.py (цикл машины), convert.py, exif.py, naming.py, manifest.py,
-                variants.yaml (размеры и качество), __main__.py (CLI без бота)
+bot/            main.py (точка входа python -m bot.main), auth.py (партнёры и админ),
+                router.py (/start /menu /help /status /last /cancel), menu.py (реестр меню, кнопки m:…),
+                dialogs.py (диалоги на aiogram FSM)
+core/           общее для всех модулей: settings.py (.env), log.py (логи без секретов), db.py (SQLite:
+                очередь, журнал events), queue.py (очередь, воркер, ежедневное расписание),
+                drive.py (обёртка над rclone), dialog.py (пошаговые диалоги), numbering.py (номер машины)
+modules/        __init__.py — включённые модули (ENABLED), порядок и активность кнопок меню (MENU)
+  drive/        экран «Google Drive» (подкоманды — фаза B)
+  crm/          кнопка «CRM», неактивна
+  photos/       /fotos и кнопка «Форматировать фото»: handlers.py, menu.py, job.py (цикл машины), convert.py,
+                exif.py, naming.py, manifest.py, variants.yaml (размеры и качество), __main__.py (CLI без бота)
   _template/    заготовка нового модуля
 tests/          pytest; fixtures/ — реальные снимки (в git не лежат), fakes/ — фейковый rclone
 data/           volume: SQLite (очередь, журнал) и временные файлы; в git не лежит
@@ -60,7 +68,7 @@ Dockerfile, docker-compose.yml, .env.example
 
    ```
    mkdir -p rclone
-   docker compose run --rm --no-deps photos rclone config
+   docker compose run --rm --no-deps bot rclone config
    ```
 
    Команда заменяет запуск бота, поэтому токен бота в `.env` для неё не нужен. Каталог `./rclone`
@@ -82,7 +90,7 @@ Dockerfile, docker-compose.yml, .env.example
    - сохранить (`y`), выйти (`q`).
 
    Проверка:
-   `docker compose run --rm --no-deps photos rclone lsd motorhof:MOTORHOF_AUTO` — должны быть видны
+   `docker compose run --rm --no-deps bot rclone lsd motorhof:MOTORHOF_AUTO` — должны быть видны
    `MH_AUTO_НАЛИЧИЕ`, `MH_AUTO_ПРОДАНО`, `KO_AUTO_НАЛИЧИЕ`, `KO_AUTO_ПРОДАНО`.
    Монтируется каталог `rclone/`, а не сам файл: rclone сохраняет обновлённый токен переименованием
    файла, а смонтированный отдельно файл переименовать нельзя.
@@ -90,7 +98,7 @@ Dockerfile, docker-compose.yml, .env.example
    **Сменить клиент у уже настроенного remote** (было с пустым `client_id`):
 
    ```
-   docker compose run --rm --no-deps photos rclone config
+   docker compose run --rm --no-deps bot rclone config
    ```
 
    `e` (Edit) → `motorhof` → `client_id` → `client_secret` → Enter на остальное (scope и прочее
@@ -142,19 +150,41 @@ Dockerfile, docker-compose.yml, .env.example
 
 - Запуск / пересборка: `docker compose up -d --build`
 - Обновление одной командой: `git pull && docker compose up -d --build`
-- Логи: `docker compose logs -f photos` (stdout контейнера; токен бота и OAuth-материал rclone вырезаются)
+- Логи: `docker compose logs -f bot` (stdout контейнера; токен бота и OAuth-материал rclone вырезаются)
 - Остановка: `docker compose down` (очередь и журнал остаются в `./data`)
 
 Контейнер: `python:3.12-slim`, `LANG=C.UTF-8` (кириллица в путях Drive), `TZ=Europe/Vienna`,
 rclone v1.71.1 для `linux-amd64` из официального релиза GitHub (проверка контрольной суммы и `rclone version` при сборке).
-`docker-compose.yml`: один сервис `photos`, `restart: unless-stopped`, `env_file: .env`, volumes
+`docker-compose.yml`: один сервис `bot` (контейнер `motorhof-bot`), `restart: unless-stopped`, `env_file: .env`, volumes
 `./data:/app/data` и `./rclone:/config/rclone` (на запись); `RCLONE_CONFIG=/config/rclone/rclone.conf` задан в `Dockerfile` (только там). Процесс в контейнере работает от root (права на `./data` и `rclone/rclone.conf`).
+
+### Обновление до версии с меню (один раз)
+
+В этой версии сервис в `docker-compose.yml` называется `bot` (было `photos`), а журнал `runs`
+при первом старте переносится в общую таблицу `events`. Порядок важен:
+
+1. В Telegram `/status` — дождаться «Очередь пуста» (задача, оборванная обновлением, станет «прервано»).
+2. `docker compose down` — **до** `git pull`, пока compose-файл ещё старый: он остановит и удалит
+   контейнер `photos`. Иначе после обновления останутся два контейнера (`…-photos-1` и `motorhof-bot`)
+   с одним токеном: Telegram выдаёт `TelegramConflictError`, обе очереди работают с одной базой,
+   а старый с `restart: unless-stopped` поднимется снова после перезагрузки.
+3. `git pull && docker compose up -d --build --remove-orphans`
+4. `docker ps` — один контейнер `motorhof-bot`. В `docker compose logs bot` одна строка
+   «журнал runs перенесён в events: N записей; копия базы до миграции — …/motorhof.sqlite.bak-…».
+   `/last` в Telegram показывает прежние запуски, `/menu` — две кнопки.
+
+Если миграция не прошла (в логе `MigrationError`), бот не стартует, а база остаётся прежней
+(транзакция откатывается). Откат на старую версию после успешной миграции — только с копией:
+`docker compose down`, затем `cp data/motorhof.sqlite.bak-<дата> data/motorhof.sqlite &&
+rm -f data/motorhof.sqlite-wal data/motorhof.sqlite-shm`, `git checkout <прежний коммит>`,
+`docker compose up -d --build --remove-orphans`. Без копии старый код с новой базой не пишет журнал
+(`runs` стал представлением). События, записанные после миграции, при откате теряются.
 
 ## Проверка после запуска
 
 1. В Telegram боту: `/status` — отвечает «Очередь пуста» или что выполняется.
 2. Полный цикл одной машины без бота:
-   `docker compose exec photos python -m modules.photos MH_1022` (с `full` — плюс полноразмерные).
+   `docker compose exec bot python -m modules.photos MH_1022` (с `full` — плюс полноразмерные).
    Печатает отчёт; код выхода 0 — готово, 1 — ошибка задачи, 2 — ошибка аргументов, 3 — манифест повреждён.
 3. Reboot-тест: `sudo reboot`, после загрузки `/status` в Telegram должен ответить сам.
 4. Секреты не попали в git (PLAN §8, пре-деплой):
@@ -163,7 +193,7 @@ rclone v1.71.1 для `linux-amd64` из официального релиза G
    в `tests/` и `.autopilot/` лежат заведомо фальшивые примеры для фильтра логов, их и исключаем), и
    `git log --all --name-only --format= | grep -E '(^|/)(\.env|rclone\.conf)'` — только `.env.example`.
    Нашлось — токен перевыпустить (BotFather `/revoke`, заново `rclone config`), историю не «чинить» молча.
-5. Квоты Drive: `docker compose exec -T photos rclone lsjson motorhof:MOTORHOF_AUTO --dirs-only -vv 2>&1 >/dev/null | grep -ciE 'rate ?limit|403'`
+5. Квоты Drive: `docker compose exec -T bot rclone lsjson motorhof:MOTORHOF_AUTO --dirs-only -vv 2>&1 >/dev/null | grep -ciE 'rate ?limit|403'`
    должно вывести `0` (подробнее — «Если медленно»).
 6. После приёмки (всё выше прошло, партнёры проверили фото): `git tag v1.0 && git push origin v1.0`,
    ссылку на репозиторий записать в документацию проекта.
@@ -175,8 +205,8 @@ rclone v1.71.1 для `linux-amd64` из официального релиза G
 Норма: листинг корня за 1–2 с, `/fotos` машины на 25 снимков — минуты.
 
 ```
-docker compose exec -T photos rclone lsjson motorhof:MOTORHOF_AUTO --dirs-only -vv 2>&1 >/dev/null | grep -ciE 'rate ?limit|403'
-time docker compose exec -T photos rclone lsjson motorhof:MOTORHOF_AUTO --dirs-only >/dev/null
+docker compose exec -T bot rclone lsjson motorhof:MOTORHOF_AUTO --dirs-only -vv 2>&1 >/dev/null | grep -ciE 'rate ?limit|403'
+time docker compose exec -T bot rclone lsjson motorhof:MOTORHOF_AUTO --dirs-only >/dev/null
 ```
 
 Первая должна вывести `0`, вторая — `real` около 1–2 с. Число больше нуля и десятки секунд —
@@ -191,8 +221,25 @@ Google режет запросы по квоте (`403 … rateLimitExceeded`, r
 - `/fotos MH_1022` (или `KO_2001`) — конвертировать фото машины; `/fotos MH_1022 full` — плюс полноразмерные JPEG
 - `/fotos MH_1022 заново` — после подтверждения кнопкой перенумеровать JPEG в «На выгрузку» по дате съёмки (только переименование; прерванная доводится следующим `/fotos`)
 - `/status` — что выполняется (с прогрессом) и что в очереди
-- `/last` — последние 10 запусков
-- `/start`, `/help` — подсказка
+- `/last` — последние 10 событий журнала (запуски фото и действия других модулей)
+- `/start`, `/menu` — главное меню; `/help` — подсказка по командам
+- `/cancel` — выйти из диалога меню (задачу, которая уже в очереди, не отменяет)
+
+## Меню
+
+`/menu` (и `/start`) присылает главное меню на кнопках: **CRM** (неактивна — всплывающее
+«В разработке») и **Google Drive**. В «Google Drive» — «Форматировать фото»: бот спрашивает номер
+машины (`MH_1022`, `mh1022`, `KO_2001`), какие JPEG сделать (обычные или ещё полноразмерные),
+показывает «Что будет сделано» и ставит задачу после «Выполнить» — ту же, что `/fotos`. Экраны
+обновляются на месте, внизу «Назад»; на каждом шаге диалога «Назад» и «Отмена».
+
+- Диалог свой у каждого партнёра в каждом чате (пара chat_id + user_id): в группе двое могут
+  заполнять диалоги одновременно, чужие кнопки диалога отвечают «Этот диалог уже закрыт».
+- 10 минут без ответа — диалог закрывается («Диалог закрыт: 10 минут без ответа»).
+- Перезапуск бота закрывает незаконченные диалоги (состояние в памяти); задачи в очереди остаются.
+- В личке любое непонятное сообщение вне диалога — снова главное меню. В группе бот на обычную
+  переписку не отвечает: меню только по `/menu` и `/start`.
+- Команды (`/status`, `/fotos …`) работают и посреди диалога, диалог при этом не сбрасывается.
 
 ## Бот в группе
 
@@ -253,8 +300,16 @@ DNG не удаляются автоматически. Через `DNG_REMINDER
 
 **Модуль.** Скопировать `modules/_template/` в `modules/<имя>/`, поменять команду и тип задачи
 (см. `modules/_template/README.md`), добавить строку `"<имя>",` в `ENABLED` в `modules/__init__.py`.
-Контракт: `register(router, queue, **kwargs)` — бот передаёт `settings=<Settings>`; модуль добавляет
-команды в aiogram `Router` и типы задач `queue.register_kind("<имя>.<действие>", handler)`.
+Контракт: `register(router, queue, *, menu=None, **kwargs)` — бот передаёт `settings=<Settings>`
+и меню модуля; модуль добавляет команды в aiogram `Router`, типы задач
+`queue.register_kind("<имя>.<действие>", handler)` и кнопки меню.
+
+**Кнопку в меню.** В `register` модуля: экран — `menu.section("<экран>", "Заголовок")`, кнопка —
+`menu.action("<кнопка>", "Подпись", parent="<экран>", dialog=core.dialog.Dialog(...))` (или
+`handler=`). `parent` — `root` (главное меню) или экран любого модуля: так photos ставит кнопку
+в экран `drive`, не импортируя модуль drive. Порядок и активность — `MENU` в `modules/__init__.py`
+(`{"<экран>": {"order": 10, "enabled": False}}`, для кнопки ключ `"<модуль>:<кнопка>"`). Опечатка
+в `parent` или в `MENU` — бот не стартует, причина в логе. Решение — `docs/adr/0008-menu-registry.md`.
 Модули не импортируют друг друга; Drive, БД, лог, настройки — только из `core/`. Ядро не править.
 
 ## Тесты локально

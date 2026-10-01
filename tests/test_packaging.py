@@ -47,7 +47,7 @@ def compose() -> dict:
 
 
 def service() -> dict:
-    return compose()["services"]["photos"]
+    return compose()["services"]["bot"]
 
 
 # --- .env.example ---
@@ -74,8 +74,9 @@ def test_env_example_values_match_settings_defaults():
 
 # --- docker-compose.yml ---
 
-def test_compose_has_single_photos_service():
-    assert list(compose()["services"]) == ["photos"]
+def test_compose_has_single_bot_service():
+    assert list(compose()["services"]) == ["bot"]
+    assert service()["container_name"] == "motorhof-bot"
 
 
 def test_compose_survives_reboot_and_reads_env_file():
@@ -343,7 +344,7 @@ def test_readme_covers_deploy_update_and_checks():
     for needle in (
         "docker compose up -d --build",
         "git pull && docker compose up -d --build",
-        "docker compose logs -f photos",
+        "docker compose logs -f bot",
         "systemctl enable docker",
         "cp .env.example .env",
         "rclone lsd motorhof:MOTORHOF_AUTO",
@@ -362,8 +363,8 @@ def test_readme_rclone_setup_without_rclone_on_host():
     text = read("README.md")
     for needle in (
         # конфиг создаётся rclone из образа и сразу ложится в смонтированный ./rclone
-        "docker compose run --rm --no-deps photos rclone config",
-        "docker compose run --rm --no-deps photos rclone lsd motorhof:MOTORHOF_AUTO",
+        "docker compose run --rm --no-deps bot rclone config",
+        "docker compose run --rm --no-deps bot rclone lsd motorhof:MOTORHOF_AUTO",
         "drive", "team_drive", "office@motorhof.at", "`motorhof`",
         # сервер без браузера
         "Use web browser to automatically authenticate?",
@@ -373,7 +374,7 @@ def test_readme_rclone_setup_without_rclone_on_host():
         assert needle in text, f"README: нет «{needle}»"
     assert "~/.config/rclone" not in text, "на хосте rclone нет — копировать оттуда нечего"
     # .env должен существовать до первого docker compose run (env_file обязателен)
-    assert text.index("cp .env.example .env") < text.index("photos rclone config")
+    assert text.index("cp .env.example .env") < text.index("bot rclone config")
 
 
 def test_readme_warns_about_oauth_testing_mode_and_og_accounts():

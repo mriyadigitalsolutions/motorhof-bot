@@ -1,7 +1,12 @@
 """Точка входа: python -m bot.main.
 
-Порядок: настройки → логирование (с редактором секретов) → БД → очередь → доступ →
-модули из реестра → общие команды → воркер очереди (с уведомлением о прерванных) → long polling.
+Порядок: настройки → логирование (с редактором секретов) → БД (с миграцией журнала) → очередь →
+доступ → модули из реестра (команды, задачи, кнопки меню) → общие команды → воркер очереди
+(с уведомлением о прерванных) → long polling.
+
+Роутеры по порядку: общие команды → диалоги (текст партнёра с открытым диалогом, кнопки m:dlg:)
+→ меню (кнопки m:) → модули → запасной (нераспознанное в личке → меню). Состояние диалогов —
+aiogram FSM в памяти, ключ chat_id + user_id (FSMStrategy.USER_IN_CHAT).
 """
 from __future__ import annotations
 
@@ -12,6 +17,8 @@ from dataclasses import dataclass
 
 from aiogram import Bot, Dispatcher, Router
 from aiogram.exceptions import TelegramUnauthorizedError
+from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.fsm.strategy import FSMStrategy
 from aiogram.utils.token import TokenValidationError, validate_token
 
 import modules
@@ -20,8 +27,10 @@ from core.log import setup_logging
 from core.queue import Job, JobQueue, Notify
 from core.settings import Settings, load_settings
 
+from . import menu as menu_mod
 from .auth import Access, AccessMiddleware
-from .router import help_text, make_router
+from .dialogs import Dialogs
+from .router import help_text, make_fallback_router, make_router
 
 log = logging.getLogger("bot")
 
@@ -34,6 +43,8 @@ class App:
     access: Access
     dispatcher: Dispatcher
     help: str
+    menu: menu_mod.Menu | None = None
+    dialogs: Dialogs | None = None
 
 
 def make_notify(bot) -> Notify:
@@ -61,17 +72,21 @@ def build(settings: Settings) -> App:
     queue = JobQueue(db, limit=settings.queue_limit, tz=settings.tz)
     access = Access(settings)
 
+    menu = menu_mod.Menu()
+    dialogs = Dialogs()
     modules_router = Router(name="modules")
-    loaded = modules.register_all(modules_router, queue, settings=settings)
+    loaded = modules.register_all(modules_router, queue, menu=menu, settings=settings)
     module_help = [getattr(m, "HELP", "") for m in loaded]
 
-    dp = Dispatcher()
+    dp = Dispatcher(storage=MemoryStorage(), fsm_strategy=FSMStrategy.USER_IN_CHAT)
     dp["access"] = access  # хендлеры получают его аргументом access (права админа)
     dp["settings"] = settings
     protect(dp, access)
-    dp.include_routers(make_router(queue, db, settings.tz, module_help), modules_router)
+    dp.include_routers(make_router(queue, db, settings.tz, module_help, menu, dialogs),
+                       dialogs.router(), menu_mod.make_router(menu, dialogs), modules_router,
+                       make_fallback_router(menu))
     log.info("модули: %s", ", ".join(m.__name__ for m in loaded) or "нет")
-    return App(settings, db, queue, access, dp, help_text(module_help))
+    return App(settings, db, queue, access, dp, help_text(module_help), menu, dialogs)
 
 
 async def serve(app: App, bot: Bot) -> None:

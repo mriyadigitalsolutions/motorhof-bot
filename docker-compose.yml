@@ -1,9 +1,11 @@
-# motorhof-bot: один сервис. Запуск и обновление: git pull && docker compose up -d --build
+# motorhof-bot: один сервис bot. Запуск и обновление: git pull && docker compose up -d --build
+# (переход со старого имени сервиса photos — README, «Обновление до версии с меню»)
 # Секреты здесь не пишем: они в .env (env_file) и в rclone/rclone.conf (volume).
 services:
-  photos:
+  bot:
     build: .
     image: motorhof-bot:latest
+    container_name: motorhof-bot
     restart: unless-stopped          # поднимается после перезагрузки (нужен systemctl enable docker)
     env_file: .env
     volumes:
