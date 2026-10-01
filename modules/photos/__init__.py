@@ -13,8 +13,9 @@ from core.queue import JobQueue
 from core.settings import Settings, load_settings
 
 from . import handlers
-from .reminders import KIND_DELETE, Reminders
-from .renumber import KIND as KIND_RENUMBER, Renumberer
+from .jobs import KIND_DELETE, KIND_RENUMBER
+from .reminders import Reminders
+from .renumber import Renumberer
 
 MODULE = handlers.MODULE
 HELP = handlers.HELP

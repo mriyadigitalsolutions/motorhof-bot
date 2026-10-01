@@ -20,10 +20,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable
 
-from core.drive import CarAmbiguous, CarNotFound, Drive, DriveError
+from core.drive import Drive, DriveError
 
 from .convert import SOURCE_SUFFIXES, ConvertError, Variant, read_meta, to_jpeg
-from .manifest import MANIFEST_NAME, Manifest, ManifestCorrupt, Plan, RenderItem, Source, sha256_file
+from .manifest import MANIFEST_NAME, Manifest, Plan, RenderItem, Source, sha256_file
+from .store import (  # noqa: F401 — ошибки задачи остаются доступны как job.JobError и т.д.
+    BadCode, CarDuplicate, CarMissing, DriveFailed, JobError, ManifestBroken, NoPhotosFolder,
+    NoSpace, complete, drive_text, find_car, load_manifest,
+)
 
 log = logging.getLogger(__name__)
 
@@ -31,46 +35,6 @@ SPACE_RESERVE = 1.2  # скачиваемое + 20%
 
 Progress = Callable[[int, int], None]
 Announce = Callable[[str], None]
-
-
-# ---------- ошибки с готовым текстом ----------
-
-class JobError(Exception):
-    """Ошибка задачи: `.user_text` отправляется партнёру как есть, `.status` — для журнала."""
-
-    status = "failed"
-
-    def __init__(self, user_text: str):
-        self.user_text = user_text
-        super().__init__(user_text)
-
-
-class BadCode(JobError):
-    pass
-
-
-class CarMissing(JobError):
-    pass
-
-
-class CarDuplicate(JobError):
-    pass
-
-
-class NoPhotosFolder(JobError):
-    pass
-
-
-class ManifestBroken(JobError):
-    pass
-
-
-class NoSpace(JobError):
-    pass
-
-
-class DriveFailed(JobError):
-    pass
 
 
 # ---------- отчёт ----------
@@ -139,13 +103,6 @@ def _mtime(value: str) -> datetime | None:
         return None
 
 
-def drive_text(code: str, e: DriveError) -> str:
-    text = f"{code}: ошибка Google Drive — {e.message}"
-    if e.stderr_tail:
-        text += "\nПоследние строки rclone:\n" + "\n".join(e.stderr_tail)
-    return text + "\nПовтори позже; если повторяется — проверь доступ rclone к Drive."
-
-
 def _mb(n: float) -> str:
     return f"{n / 1_000_000:.0f} МБ"
 
@@ -170,18 +127,6 @@ def run(code: str, variants: Iterable[Variant] | dict, drive: Drive, workdir: Pa
     return report
 
 
-def find_car(code: str, drive: Drive):
-    """Папка машины или JobError с текстом для партнёра."""
-    try:
-        return drive.find_car(code)
-    except ValueError:
-        raise BadCode("Укажи номер машины с префиксом: /fotos MH_1022 или /fotos KO_2001") from None
-    except CarNotFound as e:
-        raise CarMissing(str(e)) from None
-    except CarAmbiguous as e:
-        raise CarDuplicate(str(e)) from None
-
-
 def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
          progress: Progress | None, announce: Announce | None) -> Report:
     car = find_car(code, drive)
@@ -199,7 +144,6 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
     manifest = load_manifest(code, drive, out_dir, outputs, tmp)
     if manifest.renumber is not None:
         # прерванная перенумерация (/fotos … заново) — сначала довести, потом обычный цикл
-        from .renumber import complete
         manifest = complete(drive, out_dir, manifest, outputs, tmp)
         outputs = {f.name for f in drive.list_files(out_dir)}
     before = copy.deepcopy(manifest.files)
@@ -300,21 +244,6 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
         link=Drive.folder_link(drive.folder_id(out_dir)) if out_exists else None,
         status="partial" if errors else "done",
     )
-
-
-def load_manifest(code: str, drive: Drive, out_dir: str, outputs: set[str], tmp: Path) -> Manifest:
-    """_manifest.json из «На выгрузку» (нет файла — пустой); битый → ManifestBroken."""
-    manifest_local = None
-    if MANIFEST_NAME in outputs:
-        manifest_local = drive.pull(f"{out_dir}/{MANIFEST_NAME}", tmp / MANIFEST_NAME)
-    try:
-        return Manifest.load(manifest_local, mh=code)
-    except ManifestCorrupt as e:
-        log.warning("%s: %s не принят: %s", code, MANIFEST_NAME, e)
-        raise ManifestBroken(
-            f'{code}: файл учёта {MANIFEST_NAME} в папке "{drive.output_subdir}" повреждён. '
-            "Удали или исправь его — бот не будет перезаписывать папку вслепую."
-        ) from None
 
 
 def _check_space(code: str, tmp: Path, download: int) -> None:

@@ -24,14 +24,15 @@ from core.log import redact
 from core.queue import Job, JobQueue, QueueFull
 
 from . import job as job_mod
+from . import jobs
 from . import renumber as renumber_mod
 from .convert import Variant, load_variants
 
 log = logging.getLogger(__name__)
 
 COMMAND = "fotos"
-MODULE = "photos"
-KIND = "photos.convert"
+MODULE = jobs.MODULE
+KIND = jobs.KIND_CONVERT
 CODE_HINT = "Укажи номер машины с префиксом: /fotos MH_1022 или /fotos KO_2001"
 HELP = ("/fotos MH_1022 — конвертировать фото машины в JPEG (или KO_2001)\n"
         "/fotos MH_1022 full — то же плюс полноразмерные JPEG\n"
@@ -97,11 +98,12 @@ def submit(queue: JobQueue, args: str | None, chat_id: int, telegram_id: int,
         req = parse_request(args, variants)
     except BadRequest as e:
         return e.text
-    if req.action == "renumber":  # вопрос с кнопками — через answer(..., renumber=...)
-        return CODE_HINT
-    position = renumber_mod.busy(queue, req.code)
-    if position is not None and _renumber_job(queue, req.code):
-        return renumber_mod.busy_text(req.code, position)
+    if req.action == "renumber":  # «заново» ставится только после кнопки — см. answer()
+        return f"{req.code}: перенумерацию нужно подтвердить кнопкой — напиши /fotos {req.code} заново."
+    # перенумерация этой машины в очереди — /fotos ждёт её (дубль /fotos очередь отсеет сама)
+    position = jobs.busy(queue, req.code, (jobs.KIND_RENUMBER,))
+    if position is not None:
+        return jobs.busy_text(req.code, position)
     try:
         result = queue.enqueue(MODULE, KIND, {"key": req.code, "variants": req.extra},
                                chat_id, telegram_id, user_name)
@@ -114,13 +116,6 @@ def submit(queue: JobQueue, args: str | None, chat_id: int, telegram_id: int,
             text = f"{req.code} уже в очереди, позиция {result.position}"
         return text + _not_added(queue, result.duplicate_of, req.extra)
     return f"{req.code}: в очереди, позиция {result.position}"
-
-
-def _renumber_job(queue: JobQueue, code: str) -> bool:
-    """Машина занята именно перенумерацией (дубль /fotos с /fotos отвечает submit сам)."""
-    st = queue.status()
-    jobs = ([st.current] if st.current else []) + st.queued
-    return any(j.kind == renumber_mod.KIND and j.key == code for j in jobs)
 
 
 def answer(queue: JobQueue, args: str | None, chat_id: int, telegram_id: int, user_name: str,

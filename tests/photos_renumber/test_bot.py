@@ -84,11 +84,19 @@ def test_confirm_twice_queues_once(queue, service):
     assert len(queue.status().queued) == 1
 
 
-def test_renumber_and_plain_fotos_share_one_key(queue, service):
+async def test_busy_car_keeps_request_alive_and_button_works_later(queue, service):
     assert handlers.submit(queue, "MH_1022", PARTNER, PARTNER, "Анна") == "MH_1022: в очереди, позиция 1"
     _, buttons = _ask(queue, service)
-    assert service.press(dict(buttons)["Перенумеровать"], PARTNER) == "MH_1022 уже в очереди, позиция 1"
+    go = dict(buttons)["Перенумеровать"]
+
+    assert service.press(go, PARTNER) == ("MH_1022 уже в очереди, позиция 1. "
+                                          "Нажми «Перенумеровать», когда закончится.")
     assert [j.kind for j in queue.status().queued] == [handlers.KIND]
+
+    queue.register_kind(handlers.KIND, lambda job: None)  # /fotos отработал
+    await queue.run_next()
+    assert service.press(go, PARTNER) == "MH_1022: в очереди, позиция 1"
+    assert [j.kind for j in queue.status().queued] == [KIND]
 
 
 def test_plain_fotos_waits_for_queued_renumber(queue, service):
@@ -97,6 +105,19 @@ def test_plain_fotos_waits_for_queued_renumber(queue, service):
     text, markup = handlers.answer(queue, "MH_1022 full", PARTNER, PARTNER, "Анна", renumber=service)
     assert (text, markup) == ("MH_1022 уже в очереди, позиция 1", None)
     assert [j.kind for j in queue.status().queued] == [KIND]
+
+
+def test_submit_without_buttons_does_not_queue_zanovo(queue):
+    text = handlers.submit(queue, "MH_1022 заново", PARTNER, PARTNER, "Анна")
+    assert text == "MH_1022: перенумерацию нужно подтвердить кнопкой — напиши /fotos MH_1022 заново."
+    assert queue.status().queued == []
+
+
+def test_interrupted_text_suggests_zanovo(queue, service):
+    _, buttons = _ask(queue, service)
+    service.press(dict(buttons)["Перенумеровать"], PARTNER)
+    [job] = queue.status().queued
+    assert "/fotos MH_1022 заново" in service.interrupted(job)
 
 
 def test_help_mentions_zanovo():
@@ -112,7 +133,7 @@ async def test_register_routes_phr_button_to_renumber(queue, drive, tmp_path):
 
     import modules.photos as photos
     from core.settings import load_settings
-    from tests.photos_reminders.test_wiring import FakeBot
+    from tests.fakes.telegram import FakeBot
 
     router = Router()
     photos.register(router, queue, settings=replace(load_settings(env={}), tmp_dir=tmp_path / "t"),

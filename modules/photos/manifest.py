@@ -4,7 +4,7 @@
 Выданные имена не меняются никогда; новые исходники получают max(NN)+1 по дате съёмки.
 Исключение — явная перенумерация (`renumber.py`): пока она не доведена, её план лежит в поле
 `renumber` манифеста (`{"phase": "pass1"|"pass2", "count", "moves": [[из, временное, в], ...],
-"files": [...]}`), после доведения поля нет.
+"nn": {"старый": новый}}`, см. store.py), после доведения поля нет.
 """
 from __future__ import annotations
 
@@ -78,12 +78,12 @@ def _check_files(files: list) -> None:
 def _check_renumber(r: object) -> None:
     """План перенумерации: фаза, ходы [из, временное, в] строками, будущий список files."""
     ok = (isinstance(r, dict) and r.get("phase") in ("pass1", "pass2")
-          and isinstance(r.get("moves"), list) and isinstance(r.get("files"), list)
+          and isinstance(r.get("moves"), list) and isinstance(r.get("nn"), dict)
           and all(isinstance(m, list) and len(m) == 3 and all(isinstance(x, str) for x in m)
-                  for m in r["moves"]))
+                  for m in r["moves"])
+          and all(k.isdigit() and isinstance(v, int) for k, v in r["nn"].items()))
     if not ok:
         raise ManifestCorrupt("манифест повреждён: план перенумерации")
-    _check_files(r["files"])
 
 
 class Manifest:

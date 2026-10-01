@@ -11,6 +11,7 @@ import modules.photos as photos
 from core.settings import load_settings
 from modules.photos import handlers
 from modules.photos.job import Report
+from tests.fakes.telegram import FakeBot
 from tests.photos_reminders.conftest import ADMIN, MB, PARTNER, Access, add_converted, make_car
 
 
@@ -56,17 +57,6 @@ async def test_successful_fotos_records_car(queue, drive, clock, tmp_path, servi
     handlers.submit(queue, "MH_1022", 555, 555, "Анна")
     await queue.run_next()
     assert service.state("MH_1022") == "idle"
-
-
-class FakeBot:
-    """Вместо сети Telegram: принимает методы API (answerCallbackQuery) и копит их."""
-
-    def __init__(self) -> None:
-        self.methods = []
-
-    async def __call__(self, method, request_timeout=None):
-        self.methods.append(method)
-        return True
 
 
 def _callback(data: str, user_id: int, bot) -> CallbackQuery:

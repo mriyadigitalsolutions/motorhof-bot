@@ -28,11 +28,10 @@ from core.drive import CarAmbiguous, CarFolder, CarNotFound, Drive, DriveError
 from core.queue import Job, JobFailedQuietly, JobQueue, QueueFull
 
 from .cleanup import DngSet, delete_dng, find_dng, mb
+from .jobs import KIND_DELETE, MODULE
 
 log = logging.getLogger(__name__)
 
-MODULE = "photos"
-KIND_DELETE = "photos.delete_dng"
 PREFIX = "ph"
 REMIND_AFTER_DAYS = 7
 TRASH_DAYS = 30

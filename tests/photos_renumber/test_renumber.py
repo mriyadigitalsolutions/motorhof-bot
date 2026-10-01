@@ -3,7 +3,16 @@ from __future__ import annotations
 
 import pytest
 
-from modules.photos import renumber
+from datetime import datetime
+
+from core.drive import Drive
+from modules.photos import cleanup, job, renumber
+from modules.photos.convert import load_variants
+from modules.photos.job import DriveFailed
+from modules.photos.manifest import MANIFEST_NAME
+from tests.fakes.drive_tree import ROOT
+from tests.fakes.fail_nth import FailNth, command, upload_to
+from tests.fakes.images import make_jpeg
 from tests.photos_renumber.conftest import CODE, build, content, entry, listing, read_manifest
 
 # Четыре снимка: номер 01 снят позже всех датированных, 04 без даты.
@@ -14,6 +23,7 @@ C3 = entry(3, "c.DNG", "listing", "2026-09-02T09:00:00", src_deleted=True)
 C3F = entry(3, "c.DNG", "full", "2026-09-02T09:00:00", src_deleted=True)
 D4 = entry(4, "d.JPG", "listing", None)
 MIXED = [A1, A1F, B2, C3, C3F, D4]
+LISTING = [v for v in load_variants().values() if not v.on_demand]
 
 
 def test_renumbers_by_taken_full_with_listing_orphan_and_deleted_kept(base, drive, work):
@@ -97,40 +107,21 @@ EXPECTED = {
 }
 
 
-class FailNth:
-    """Runner поверх FakeRclone: n-й вызов `command` (с `match` в аргументах) падает."""
-
-    def __init__(self, fake, command: str, n: int, match: str = "") -> None:
-        self.fake, self.command, self.n, self.match, self.seen = fake, command, n, match, 0
-
-    def __call__(self, args, timeout=None):
-        from core.drive import RunResult
-        if args[1] == self.command and any(self.match in a for a in args[2:]):
-            self.seen += 1
-            if self.seen == self.n:
-                return RunResult(1, "", "ERROR : связь оборвалась\n")
-        return self.fake(args, timeout)
-
-
-def _interrupt(base, fake, work, command, n, match=""):
-    from core.drive import Drive
-    from modules.photos.job import DriveFailed
-    from tests.fakes.drive_tree import ROOT
-    out = build(base, [dict(e) for e in MIXED])
-    broken = Drive("motorhof", ROOT, runner=FailNth(fake, command, n, match))
-    try:
-        renumber.run(CODE, broken, work)
-    except DriveFailed:
-        pass
-    else:
-        raise AssertionError("сбой не случился")
+def _interrupt(base, fake, work, n, pred, files=MIXED):
+    """«заново» обрывается на n-м подходящем вызове rclone; возвращает «На выгрузку»."""
+    out = build(base, [dict(e) for e in files])
+    runner = FailNth(fake, n, pred)
+    with pytest.raises(DriveFailed):
+        renumber.run(CODE, Drive("motorhof", ROOT, runner=runner), work)
+    assert runner.failed
     return out
 
 
 @pytest.mark.parametrize("n", range(1, 11))  # 5 переименований × 2 прохода
 def test_interrupted_rename_is_completed_by_next_renumber(base, drive, fake, work, n):
-    out = _interrupt(base, fake, work, "moveto", n)
+    out = _interrupt(base, fake, work, n, command("moveto"))
     assert n == 1 or any(name.startswith(".renumber-") for name in listing(out))
+    assert "renumber" in read_manifest(out)  # план на Drive до первого переименования
 
     assert renumber.run(CODE, drive, work).text() == "MH_1022: перенумеровано 3 фото по дате съёмки."
     assert listing(out) == EXPECTED  # ни потерянных, ни задвоенных, ни временных
@@ -140,10 +131,57 @@ def test_interrupted_rename_is_completed_by_next_renumber(base, drive, fake, wor
 
 @pytest.mark.parametrize("n", [1, 2, 3])  # план, отметка прохода 2, итоговый манифест
 def test_interrupted_manifest_upload_is_completed_by_next_renumber(base, drive, fake, work, n):
-    out = _interrupt(base, fake, work, "copyto", n, match="_manifest.json")
+    out = _interrupt(base, fake, work, n, upload_to("motorhof", MANIFEST_NAME))
+    remote = read_manifest(out)
+    if n == 1:  # план не записан — ничего не тронуто
+        assert "renumber" not in remote and listing(out) == {e["out"]: content(e) for e in MIXED}
+    else:  # план записан, итог — нет: на Drive ещё старый учёт с планом
+        assert remote["renumber"]["phase"] == ("pass1" if n == 2 else "pass2")
+    if n == 3:
+        assert listing(out) == EXPECTED  # все файлы уже на новых местах
+
     renumber.run(CODE, drive, work)
     assert listing(out) == EXPECTED
     assert "renumber" not in read_manifest(out)
+    assert {f["out"] for f in read_manifest(out)["files"]} == set(EXPECTED)
+
+
+@pytest.mark.parametrize("resume", ["renumber", "fotos"])
+def test_foreign_file_on_target_name_blocks_completion(base, drive, fake, work, resume):
+    out = _interrupt(base, fake, work, 6, command("moveto"))  # проход 1 сделан, проход 2 — нет
+    (out / "MH_1022_01.jpg").write_bytes(b"foreign")
+
+    with pytest.raises(renumber.RenumberBlocked) as e:
+        if resume == "renumber":
+            renumber.run(CODE, drive, work)
+        else:  # обычный /fotos тоже сначала доводит план
+            make_jpeg(out.parent / "x.JPG", taken=datetime(2026, 9, 1))
+            job.run(CODE, LISTING, drive, work)
+    assert "MH_1022_01.jpg" in e.value.user_text
+    assert (out / "MH_1022_01.jpg").read_bytes() == b"foreign"
+    assert sum(name.startswith(".renumber-") for name in listing(out)) == 5  # никто не перезаписан
+    assert "renumber" in read_manifest(out)
+
+
+def test_changes_after_plan_survive_completion(base, drive, fake, work):
+    """Обрыв → удаление DNG (src_deleted в манифест) → доведение: src_deleted на месте."""
+    live = [dict(e, src_deleted=False) for e in MIXED]
+    out = _interrupt(base, fake, work, 1, command("moveto"), files=live)  # план есть, файлы на месте
+    (out.parent / "c.DNG").write_bytes(b"dng")
+    fake.no_hash = {"c.DNG"}
+    car = drive.find_car(CODE)
+    dngs = cleanup.find_dng(drive, car, work)
+    assert [d.name for d in dngs.files] == ["c.DNG"]
+    cleanup.delete_dng(drive, car, work, dngs)
+    assert "renumber" in read_manifest(out)  # удаление DNG план не теряет
+
+    renumber.run(CODE, drive, work)
+
+    files = {(f["src"], f["variant"]): f for f in read_manifest(out)["files"]}
+    assert files[("c.DNG", "listing")]["src_deleted"] is True
+    assert files[("c.DNG", "full")]["src_deleted"] is True
+    assert (files[("c.DNG", "full")]["nn"], files[("c.DNG", "full")]["out"]) == (2, "MH_1022_02_full.jpg")
+    assert listing(out) == EXPECTED
 
 
 def test_interrupted_renumber_is_completed_by_plain_fotos(base, drive, fake, work):
@@ -171,7 +209,7 @@ def test_interrupted_renumber_is_completed_by_plain_fotos(base, drive, fake, wor
                       "IMG_1.JPG": "MH_1022_03.jpg"}
     bytes_of = {src: (out / name).read_bytes() for src, name in by_src.items()}
 
-    broken = Drive("motorhof", ROOT, runner=FailNth(fake, "moveto", 2))
+    broken = Drive("motorhof", ROOT, runner=FailNth(fake, 2, command("moveto")))
     with pytest.raises(DriveFailed):
         renumber.run(CODE, broken, work)
 
