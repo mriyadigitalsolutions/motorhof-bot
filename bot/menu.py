@@ -1,4 +1,5 @@
-"""Меню на inline-кнопках: реестр экранов и кнопок, которые объявляют модули, и его роутер.
+"""Меню на нижней клавиатуре Telegram (ReplyKeyboard): реестр экранов и кнопок, которые
+объявляют модули, и его роутер.
 
 Дерево строится по `parent`: модуль объявляет экран (`section`) или кнопку действия
 (`action`) с родителем — корнем (`root`, главное меню) или экраном другого модуля. Так photos
@@ -6,11 +7,12 @@
 друг друга не импортируют. Порядок и активность кнопок переопределяет `modules.MENU`
 (`Menu.configure`); ядро имён модулей не знает. Решение — docs/adr/0008-menu-registry.md.
 
-callback_data: `m:<модуль>:<действие>:<аргумент>`, не длиннее 64 байт:
-  m:menu:open:<экран>   открыть экран (кнопки экранов и «Назад»),
-  m:<модуль>:<кнопка>:  нажать кнопку действия модуля,
-  m:dlg:…               кнопки диалога (bot/dialogs.py, core/dialog.py).
-«Назад» ведёт к родителю экрана — без состояния, работает и после перезапуска бота.
+Нажатие кнопки приходит обычным текстом с её подписью. Подписи кнопок меню уникальны и не
+совпадают со служебными «Назад», «Отмена», «Выполнить» (`validate`), поэтому кнопка
+находится по подписи без сохранённого состояния — и после перезапуска бота. Текущий экран
+(ключ "screen" в данных FSM, пара chat_id + user_id) нужен только «Назад»: без него —
+главное меню. В группе ответ — reply на сообщение партнёра, клавиатура `selective`:
+Telegram показывает её только ему. Старые inline-кнопки `m:…` отвечают «Кнопка устарела».
 """
 from __future__ import annotations
 
@@ -20,11 +22,11 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Union
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup,
+                           ReplyParameters)
 
-from core.dialog import Context, Dialog
+from core.dialog import BACK_LABEL, CANCEL_LABEL, RUN_LABEL, Context, Dialog, normalize_label
 
 ROOT = "root"
 ROOT_TITLE = "Главное меню"
@@ -33,14 +35,16 @@ MENU_MODULE = "menu"
 DISABLED = "В разработке"
 EMPTY = "Здесь пока ничего нет"
 UNKNOWN = "Кнопка устарела, открой /menu"
-BACK = "Назад"
-MAX_CALLBACK = 64
+BACK = BACK_LABEL
+SCREEN_KEY = "screen"
+SERVICE_LABELS = {BACK_LABEL, CANCEL_LABEL, RUN_LABEL}
+GROUP_TYPES = {"group", "supergroup"}
 
 _ID = re.compile(r"^[a-z0-9_]{1,20}$")
 _RESERVED = {MENU_MODULE, "dlg"}
 
 Handler = Callable[[Context], Union[str, Awaitable[str]]]
-Rows = list[list[tuple[str, str]]]
+Rows = list[list[str]]
 
 
 @dataclass
@@ -58,44 +62,30 @@ class Node:
     text: str | None = None
     seq: int = 0  # порядок объявления: при равном order кнопки идут так, как их объявили
 
-    @property
-    def callback(self) -> str:
-        if self.kind == "section":
-            return f"{PREFIX}{MENU_MODULE}:open:{self.id}"
-        return f"{PREFIX}{self.module}:{self.id}:"
-
 
 @dataclass
 class Screen:
+    """Экран меню: текст и подписи кнопок по рядам."""
     text: str
     rows: Rows = field(default_factory=list)
-
-    def markup(self) -> InlineKeyboardMarkup | None:
-        return keyboard(self.rows)
 
 
 @dataclass
 class Press:
-    """Разбор нажатия: screen — показать экран; alert — всплывающий текст без смены экрана;
-    dialog — начать диалог; handler — вызвать действие."""
+    """Разбор нажатия: screen — показать экран screen_id; notice — ответить text без смены
+    клавиатуры; dialog — начать диалог node (вернуться в screen_id); handler — вызвать
+    действие node и показать экран screen_id; none — подпись не кнопка меню."""
     kind: str
+    screen_id: str = ROOT
     screen: Screen | None = None
     text: str = ""
     node: Node | None = None
 
 
-def keyboard(rows: Rows) -> InlineKeyboardMarkup | None:
-    if not rows:
-        return None
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=label, callback_data=data) for label, data in row]
-        for row in rows])
-
-
-def check_callback(data: str) -> str:
-    if len(data.encode("utf-8")) > MAX_CALLBACK:
-        raise ValueError(f"callback_data длиннее {MAX_CALLBACK} байт: {data!r}")
-    return data
+def reply_keyboard(rows: Rows) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=label) for label in row] for row in rows],
+        resize_keyboard=True, is_persistent=True, selective=True)
 
 
 class Menu:
@@ -125,7 +115,6 @@ class Menu:
             raise ValueError(f"экран {id!r} уже объявлен")
         node = Node("section", id, title, parent, order, enabled, module, text=text,
                     seq=self._next_seq())
-        check_callback(node.callback)
         self._sections[id] = node
         return node
 
@@ -139,7 +128,6 @@ class Menu:
             raise ValueError(f"кнопка {module}:{id} уже объявлена")
         node = Node("action", id, title, parent, order, enabled, module, dialog, handler,
                     seq=self._next_seq())
-        check_callback(node.callback)
         self._actions[(module, id)] = node
         return node
 
@@ -149,7 +137,8 @@ class Menu:
         self._overrides = {k: dict(v) for k, v in (overrides or {}).items()}
 
     def validate(self) -> None:
-        """Дерево собрано без ошибок: родители существуют и это экраны, циклов нет.
+        """Дерево собрано без ошибок: родители существуют и это экраны, циклов нет, подписи
+        кнопок уникальны и не служебные (кнопка ищется по подписи).
         Зовётся после регистрации модулей — опечатка в parent не даёт боту стартовать."""
         for node in self._nodes():
             if node.parent != ROOT and node.parent not in self._sections:
@@ -164,6 +153,14 @@ class Menu:
         for key in self._overrides:
             if key not in self._sections and tuple(key.split(":", 1)) not in self._actions:
                 raise ValueError(f"modules.MENU: {key!r} не объявлен ни одним модулем")
+        seen_labels: dict[str, Node] = {}
+        for node in self._nodes():
+            if node.title in SERVICE_LABELS:
+                raise ValueError(f"{_name(node)}: подпись {node.title!r} занята диалогом")
+            if node.title in seen_labels:
+                raise ValueError(f"{_name(node)}: подпись {node.title!r} уже у "
+                                 f"{_name(seen_labels[node.title])}")
+            seen_labels[node.title] = node
 
     # --- чтение -------------------------------------------------------------
     def _nodes(self) -> list[Node]:
@@ -184,37 +181,45 @@ class Menu:
 
     def screen(self, section_id: str = ROOT) -> Screen:
         if section_id == ROOT:
-            title, back = ROOT_TITLE, None
+            title, back = ROOT_TITLE, False
         else:
             node = self._sections[section_id]
-            title = node.text or node.title
-            back = f"{PREFIX}{MENU_MODULE}:open:{node.parent}"
-        rows: Rows = [[(n.title, n.callback)] for n in self.children(section_id)]
+            title, back = node.text or node.title, True
+        rows: Rows = [[n.title] for n in self.children(section_id)]
         if not rows and section_id != ROOT:
             title = f"{title}\n\n{EMPTY}"
-        if back is not None:
-            rows.append([(BACK, back)])
+        if back:
+            rows.append([BACK])
         return Screen(title, rows)
 
-    def press(self, data: str | None) -> Press:
-        """Нажатие кнопки меню → что показать или сделать."""
-        parts = (data or "").split(":", 3)
-        if len(parts) < 3 or parts[0] + ":" != PREFIX:
-            return Press("alert", text=UNKNOWN)
-        module, action = parts[1], parts[2]
-        if module == MENU_MODULE:
-            target = parts[3] if len(parts) > 3 else ""
-            if action != "open" or (target != ROOT and target not in self._sections):
-                return Press("alert", text=UNKNOWN)
-            if target != ROOT and not self.enabled(self._sections[target]):
-                return Press("alert", text=DISABLED)
-            return Press("screen", screen=self.screen(target))
-        node = self._actions.get((module, action))
+    def has_screen(self, section_id: str | None) -> bool:
+        return section_id == ROOT or section_id in self._sections
+
+    def labels(self) -> set[str]:
+        """Подписи, которые меню считает нажатием своей кнопки."""
+        return {n.title for n in self._nodes()} | {BACK}
+
+    def is_label(self, text: str | None) -> bool:
+        """Текст — нажатие кнопки меню (сравнение по normalize_label, как в диалоге)."""
+        return normalize_label(text) in self.labels()
+
+    def press_label(self, label: str | None, current_screen: str | None) -> Press:
+        """Нажатие кнопки нижней клавиатуры (текст подписи) → что показать или сделать.
+        current_screen — экран из FSM, нужен только «Назад»; неизвестен → главное меню."""
+        label = normalize_label(label)
+        if label == BACK:
+            parent = ROOT
+            if current_screen in self._sections:
+                parent = self._sections[current_screen].parent
+            return Press("screen", parent, self.screen(parent))
+        node = next((n for n in self._nodes() if n.title == label), None)
         if node is None:
-            return Press("alert", text=UNKNOWN)
+            return Press("none")
         if not self.enabled(node) or not self._parents_enabled(node):
-            return Press("alert", text=DISABLED)
-        return Press("dialog" if node.dialog is not None else "handler", node=node)
+            return Press("notice", text=DISABLED)
+        if node.kind == "section":
+            return Press("screen", node.id, self.screen(node.id))
+        return Press("dialog" if node.dialog is not None else "handler", node.parent, node=node)
 
     def _parents_enabled(self, node: Node) -> bool:
         cur = node.parent
@@ -261,44 +266,71 @@ async def call(handler: Handler, ctx: Context) -> str:
 
 # ---------- aiogram ----------
 
-async def edit(message: Message, text: str, markup: InlineKeyboardMarkup | None) -> Message:
-    """Экран на месте сообщения. Повторное нажатие той же кнопки (текст не изменился) —
-    не ошибка: Telegram отвечает «message is not modified», экран и так нужный."""
-    try:
-        result = await message.edit_text(text, reply_markup=markup)
-    except TelegramBadRequest as e:
-        if "message is not modified" not in str(e):
-            raise
-        return message
-    return result if isinstance(result, Message) else message
+def is_group(message: Message) -> bool:
+    return message.chat.type in GROUP_TYPES or message.chat.id < 0
 
 
-async def show(message: Message, menu: Menu) -> None:
-    """Главное меню новым сообщением (/start, /menu, нераспознанный текст в личке)."""
-    screen = menu.screen(ROOT)
-    await message.answer(screen.text, reply_markup=screen.markup())
+async def answer(message: Message, text: str, rows: Rows | None = None) -> Message:
+    """Ответ партнёру: с клавиатурой rows (если есть); в группе — reply на его сообщение,
+    чтобы selective-клавиатура появилась только у него."""
+    kwargs: dict[str, Any] = {}
+    if rows:
+        kwargs["reply_markup"] = reply_keyboard(rows)
+    if is_group(message):
+        kwargs["reply_parameters"] = ReplyParameters(message_id=message.message_id,
+                                                     allow_sending_without_reply=True)
+    return await message.answer(text, **kwargs)
+
+
+async def show_screen(message: Message, menu: Menu, state: FSMContext | None,
+                      screen_id: str = ROOT, text: str | None = None) -> None:
+    """Экран screen_id (его клавиатура) и запомнить его как текущий; text — вместо текста экрана."""
+    if not menu.has_screen(screen_id):
+        screen_id = ROOT
+    screen = menu.screen(screen_id)
+    await answer(message, screen.text if text is None else text, screen.rows)
+    if state is not None:
+        await state.update_data({SCREEN_KEY: screen_id})
+
+
+async def show(message: Message, menu: Menu, state: FSMContext | None = None) -> None:
+    """Главное меню (/start, /menu, нераспознанный текст в личке)."""
+    await show_screen(message, menu, state, ROOT)
+
+
+async def handle_label(message: Message, state: FSMContext, menu: Menu, dialogs) -> bool:
+    """Текст сообщения как нажатие кнопки меню; False — это не кнопка меню."""
+    current = (await state.get_data()).get(SCREEN_KEY)
+    press = menu.press_label(message.text, current)
+    if press.kind == "none":
+        return False
+    if press.kind == "screen":
+        await show_screen(message, menu, state, press.screen_id)
+    elif press.kind == "notice":
+        await answer(message, press.text)
+    elif press.kind == "dialog":
+        await dialogs.start(press.node.dialog, message, state, message.from_user,
+                            return_screen=press.screen_id)
+    else:
+        text = await call(press.node.handler, context(message.from_user, message.chat.id))
+        await show_screen(message, menu, state, press.screen_id, text=text)
+    return True
 
 
 def make_router(menu: Menu, dialogs) -> Router:
-    """Кнопки меню m:… (кроме m:dlg:…); dialogs — bot.dialogs.Dialogs."""
+    """Кнопки нижней клавиатуры меню (текст = подпись) и старые inline-кнопки m:…;
+    dialogs — bot.dialogs.Dialogs. Подключается после роутера диалогов."""
     router = Router(name="menu")
 
-    @router.callback_query(F.data.startswith(PREFIX) & ~F.data.startswith(PREFIX + "dlg:"))
-    async def on_press(callback: CallbackQuery, state: FSMContext) -> None:
-        press = menu.press(callback.data)
-        message = callback.message if isinstance(callback.message, Message) else None
-        if press.kind == "alert" or message is None:
-            await callback.answer(press.text or UNKNOWN, show_alert=True)
-            return
-        await callback.answer()
-        if press.kind == "screen":
-            await edit(message, press.screen.text, press.screen.markup())
-            return
-        ctx = context(callback.from_user, message.chat.id)
-        if press.kind == "dialog":
-            await dialogs.start(press.node.dialog, message, state, callback.from_user, edit=True)
-            return
-        text = await call(press.node.handler, ctx)
-        await edit(message, text, None)
+    def is_label(message: Message) -> bool:
+        return message.text is not None and menu.is_label(message.text)
+
+    @router.message(is_label)
+    async def on_label(message: Message, state: FSMContext) -> None:
+        await handle_label(message, state, menu, dialogs)
+
+    @router.callback_query(F.data.startswith(PREFIX))
+    async def on_stale(callback: CallbackQuery) -> None:
+        await callback.answer(UNKNOWN, show_alert=True)
 
     return router

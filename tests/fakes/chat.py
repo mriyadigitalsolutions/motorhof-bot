@@ -1,15 +1,18 @@
-"""Партнёр в чате с ботом для сквозных тестов меню: шлёт текст и жмёт кнопки через диспетчер
+"""Партнёр в чате с ботом для сквозных тестов меню: шлёт текст (нажатие кнопки нижней
+клавиатуры = текст подписи) и жмёт старые inline-кнопки через диспетчер
 (сеть Telegram — tests.fakes.telegram.ChatBot)."""
 from __future__ import annotations
 
 from datetime import datetime
 
 from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
-from aiogram.types import CallbackQuery, Chat, Message, Update, User
+from aiogram.types import (CallbackQuery, Chat, InlineKeyboardMarkup, Message,
+                           ReplyKeyboardMarkup, Update, User)
 
 
 class Partner:
-    """Один партнёр в одном чате: шлёт текст и жмёт кнопки на последнем экране бота."""
+    """Один партнёр в одном чате: шлёт текст и жмёт inline-кнопки на последнем экране бота.
+    `last_id` — номер последнего сообщения партнёра (на него бот отвечает reply в группе)."""
     n = [0]
 
     def __init__(self, app, bot, uid, chat_id=None, name="Анна"):
@@ -25,6 +28,7 @@ class Partner:
 
     async def say(self, text):
         self.n[0] += 1
+        self.last_id = self.n[0]
         await self.app.dispatcher.feed_update(self.bot, Update(update_id=self.n[0], message=Message(
             message_id=self.n[0], date=datetime(2026, 10, 1), text=text, from_user=self._user(),
             chat=self._chat())))
@@ -38,14 +42,34 @@ class Partner:
                             text="экран"))))
 
 
+def rows(markup):
+    """Подписи кнопок по рядам: нижняя клавиатура или inline; без клавиатуры — []."""
+    if isinstance(markup, ReplyKeyboardMarkup):
+        return [[b.text for b in row] for row in markup.keyboard]
+    if isinstance(markup, InlineKeyboardMarkup):
+        return [[b.text for b in row] for row in markup.inline_keyboard]
+    return []
+
+
+def sent(bot):
+    """Отправки и правки бота по порядку."""
+    return [m for m in bot.methods if isinstance(m, (SendMessage, EditMessageText))]
+
+
 def screens(bot):
     """Что видит партнёр: (текст, [подписи кнопок]) для отправок и правок по порядку."""
-    out = []
-    for m in bot.methods:
-        if isinstance(m, (SendMessage, EditMessageText)):
-            kb = m.reply_markup.inline_keyboard if m.reply_markup else []
-            out.append((m.text, [b.text for row in kb for b in row]))
-    return out
+    return [(m.text, [label for row in rows(m.reply_markup) for label in row]) for m in sent(bot)]
+
+
+def keyboards(bot):
+    """Клавиатуры отправок по рядам: [[подпись, …], …] (None — сообщение без клавиатуры)."""
+    return [rows(m.reply_markup) if m.reply_markup else None for m in sent(bot)]
+
+
+def reply_to(method):
+    """На какое сообщение ответил бот (None — не reply)."""
+    params = getattr(method, "reply_parameters", None)
+    return params.message_id if params else getattr(method, "reply_to_message_id", None)
 
 
 def alerts(bot):

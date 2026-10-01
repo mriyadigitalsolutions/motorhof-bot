@@ -1,6 +1,6 @@
 """Общие команды: /start, /menu, /help, /status, /last, /cancel. Тексты собирают функции-сервисы.
 
-/start и /menu показывают главное меню (bot/menu.py); любое нераспознанное сообщение в личке
+/start и /menu показывают главное меню на нижней клавиатуре (bot/menu.py); любое нераспознанное сообщение в личке
 вне диалога — тоже (make_fallback_router, подключается последним). В группе нераспознанный
 текст молча пропускается: при выключенном privacy mode бот видит всю переписку партнёров.
 """
@@ -21,7 +21,7 @@ from core.queue import JobQueue
 
 from . import menu as menu_mod
 
-COMMON_HELP = ("/menu — меню на кнопках\n"
+COMMON_HELP = ("/menu — меню на клавиатуре внизу\n"
                "/cancel — выйти из диалога (задачу в очереди не отменяет)\n"
                "/status — что сейчас выполняется и что в очереди\n"
                "/last — последние 10 событий журнала\n"
@@ -103,19 +103,22 @@ def make_router(queue: JobQueue, db: Database, tz: str, module_help: Iterable[st
 
     @router.message(CommandStart())
     @router.message(Command("menu"))
-    async def on_menu(message: Message) -> None:
+    async def on_menu(message: Message, state: FSMContext) -> None:
         if menu is None:
             await message.answer(help_message)
         else:
-            await menu_mod.show(message, menu)
+            # открытый диалог закрывается молча: иначе следующая кнопка меню ушла бы в диалог
+            await state.set_state(None)
+            await state.set_data({})
+            await menu_mod.show(message, menu, state)
 
     @router.message(Command("cancel"))
     async def on_cancel(message: Message, state: FSMContext) -> None:
         if dialogs is None:
             await state.clear()
-            await message.answer("Нечего отменять")
+            await menu_mod.answer(message, "Нечего отменять")
             return
-        await message.answer(await dialogs.cancel(state))
+        await dialogs.cancel(message, state)
 
     @router.message(Command("status"))
     async def on_status(message: Message) -> None:
@@ -133,7 +136,7 @@ def make_fallback_router(menu: "menu_mod.Menu") -> Router:
     router = Router(name="fallback")
 
     @router.message(StateFilter(None), F.chat.type == "private")
-    async def on_other(message: Message) -> None:
-        await menu_mod.show(message, menu)
+    async def on_other(message: Message, state: FSMContext) -> None:
+        await menu_mod.show(message, menu, state)
 
     return router

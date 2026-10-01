@@ -4,8 +4,9 @@
 доступ → модули из реестра (команды, задачи, кнопки меню) → общие команды → воркер очереди
 (с уведомлением о прерванных) → long polling.
 
-Роутеры по порядку: общие команды → диалоги (текст партнёра с открытым диалогом, кнопки m:dlg:)
-→ меню (кнопки m:) → модули → запасной (нераспознанное в личке → меню). Состояние диалогов —
+Роутеры по порядку: общие команды → диалоги (не-командный текст партнёра с открытым диалогом)
+→ меню (текст = подпись кнопки нижней клавиатуры или «Назад»; старые inline m:… → «устарела»)
+→ модули → запасной (нераспознанное в личке вне диалога → главное меню). Состояние диалогов —
 aiogram FSM в памяти, ключ chat_id + user_id (FSMStrategy.USER_IN_CHAT).
 """
 from __future__ import annotations
@@ -73,7 +74,7 @@ def build(settings: Settings) -> App:
     access = Access(settings)
 
     menu = menu_mod.Menu()
-    dialogs = Dialogs()
+    dialogs = Dialogs(menu=menu)
     modules_router = Router(name="modules")
     loaded = modules.register_all(modules_router, queue, menu=menu, settings=settings)
     module_help = [getattr(m, "HELP", "") for m in loaded]

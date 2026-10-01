@@ -1,14 +1,17 @@
-"""Диалоги в Telegram: core/dialog.Engine поверх aiogram FSM.
+"""Диалоги в Telegram: core/dialog.Engine поверх aiogram FSM, на нижней клавиатуре.
 
-Сессия диалога лежит в данных FSM (ключ "dialog"), состояние — DialogStates.active.
-Ключ хранилища aiogram при стратегии USER_IN_CHAT — пара chat_id + user_id: в группе у
-каждого партнёра своя сессия, в личке — своя. Хранилище — в памяти: перезапуск бота
-закрывает незаконченные диалоги (их кнопки отвечают «Этот диалог уже закрыт»).
+Сессия диалога лежит в данных FSM (ключ "dialog"), экран, куда вернуться после диалога, —
+ключ "return", состояние — DialogStates.active. Ключ хранилища aiogram при стратегии
+USER_IN_CHAT — пара chat_id + user_id: в группе у каждого партнёра своя сессия, в личке —
+своя. Хранилище — в памяти: перезапуск бота закрывает незаконченные диалоги.
 
-В сессии запоминается message_id экрана диалога: кнопки чужого или старого экрана не
-двигают диалог. Команды («/…») в диалоге работают как обычно и диалог не сбрасывают;
-сбрасывают его /cancel, кнопка «Отмена» и таймаут 10 минут (проверка — при следующем
-ответе того же партнёра).
+Пока диалог открыт, любой не-командный текст партнёра идёт в диалог (роутер диалогов стоит
+раньше меню): «Назад» в диалоге — шаг назад, а не экран выше. Кнопки диалога — подписи на
+нижней клавиатуре (см. core/dialog.py). Команды («/…») в диалоге работают как обычно и диалог
+не сбрасывают; сбрасывают его /cancel, кнопка «Отмена» и таймаут 10 минут (проверка — при
+следующем ответе того же партнёра; если этот ответ — кнопка меню, кроме «Назад», она затем
+обрабатывается). /menu и /start закрывают открытый диалог молча (bot/router.py).
+Конец диалога — ответ с клавиатурой экрана, откуда диалог начат.
 """
 from __future__ import annotations
 
@@ -20,16 +23,16 @@ from typing import Callable
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import Message
 
-from core.dialog import PREFIX, STALE, Dialog, Engine, Outcome
+from core.dialog import BACK_LABEL, CANCELLED, EXPIRED, STALE, Dialog, Engine, Outcome, normalize_label
 
-from .menu import context, edit, keyboard
+from . import menu as menu_mod
 
 log = logging.getLogger(__name__)
 
 KEY = "dialog"
-CANCELLED = "Отменено"
+RETURN_KEY = "return"
 NOTHING = "Нечего отменять"
 FAILED = "Не получилось выполнить, попробуй ещё раз"
 
@@ -43,51 +46,59 @@ def utc_now() -> datetime:
 
 
 class Dialogs:
-    def __init__(self, engine: Engine | None = None, clock: Callable[[], datetime] = utc_now) -> None:
+    def __init__(self, engine: Engine | None = None, clock: Callable[[], datetime] = utc_now,
+                 menu: "menu_mod.Menu | None" = None) -> None:
         self.engine = engine or Engine()
         self.clock = clock
+        self.menu = menu
 
-    async def start(self, dialog: Dialog, message: Message, state: FSMContext, user, *,
-                    edit: bool = False) -> None:
-        """Начать диалог; edit — показать первый шаг на месте экрана меню."""
+    async def start(self, dialog: Dialog, message: Message, state: FSMContext, user,
+                    return_screen: str = menu_mod.ROOT) -> None:
+        """Начать диалог; return_screen — экран меню, чья клавиатура вернётся после него."""
+        await state.update_data({RETURN_KEY: return_screen})
         out = self.engine.start(dialog, self.clock())
-        await self._apply(out, message, state, user, edit=edit)
+        await self._apply(out, message, state, user)
 
-    async def cancel(self, state: FSMContext) -> str:
-        """/cancel: сбросить диалог этого партнёра в этом чате. Очередь не трогается."""
-        had = await state.get_state() is not None or KEY in await state.get_data()
-        await state.clear()
-        return CANCELLED if had else NOTHING
+    async def cancel(self, message: Message, state: FSMContext) -> None:
+        """/cancel: закрыть диалог этого партнёра в этом чате и ответить. Очередь не трогается."""
+        data = await state.get_data()
+        if await state.get_state() is None and KEY not in data:
+            await menu_mod.answer(message, NOTHING)
+            return
+        await self._close(message, state, CANCELLED)
 
     async def on_text(self, message: Message, state: FSMContext) -> None:
+        text = message.text or ""
         session = (await state.get_data()).get(KEY)
-        out = self.engine.text(session, message.text or "", self.clock())
-        await self._apply(out, message, state, message.from_user, edit=False)
+        out = self.engine.text(session, text, self.clock())
+        await self._apply(out, message, state, message.from_user)
+        if (out.kind == "closed" and out.text == EXPIRED and self.menu is not None
+                and self.menu.is_label(text) and normalize_label(text) != BACK_LABEL):
+            # диалог закрыт таймаутом, а партнёр нажал кнопку меню — обработать нажатие;
+            # «Назад» — нет: партнёр остаётся на экране, откуда начат диалог
+            await menu_mod.handle_label(message, state, self.menu, self)
 
-    async def on_button(self, callback: CallbackQuery, state: FSMContext) -> None:
-        message = callback.message if isinstance(callback.message, Message) else None
-        session = (await state.get_data()).get(KEY)
-        if message is None or session is None or session.get("message_id") != message.message_id:
-            # чужой, старый или потерянный при перезапуске экран: сам экран не трогаем
-            await callback.answer(STALE, show_alert=True)
-            return
-        await callback.answer()
-        out = self.engine.button(session, callback.data or "", self.clock())
-        await self._apply(out, message, state, callback.from_user, edit=True)
-
-    async def _apply(self, out: Outcome, message: Message, state: FSMContext, user, *,
-                     edit: bool) -> None:
+    async def _apply(self, out: Outcome, message: Message, state: FSMContext, user) -> None:
         if out.kind == "ask":
-            shown = await _show(message, out.text, keyboard(out.buttons), edit)
+            await menu_mod.answer(message, out.text, out.keyboard)
             await state.set_state(DialogStates.active)
-            await state.update_data({KEY: dict(out.session or {}, message_id=shown.message_id)})
+            await state.update_data({KEY: dict(out.session or {})})
             return
-        await state.clear()
         if out.kind == "finish":
-            text = await self._finish(out, context(user, message.chat.id))
+            text = await self._finish(out, menu_mod.context(user, message.chat.id))
         else:
             text = out.text
-        await _show(message, text, None, edit)
+        await self._close(message, state, text)
+
+    async def _close(self, message: Message, state: FSMContext, text: str) -> None:
+        """Сбросить диалог и ответить text с клавиатурой экрана, откуда диалог начат."""
+        screen = (await state.get_data()).get(RETURN_KEY) or menu_mod.ROOT
+        await state.set_state(None)
+        await state.set_data({})
+        if self.menu is None:
+            await menu_mod.answer(message, text)
+            return
+        await menu_mod.show_screen(message, self.menu, state, screen, text=text)
 
     async def _finish(self, out: Outcome, ctx) -> str:
         dialog = self.engine.get(out.dialog)
@@ -101,15 +112,8 @@ class Dialogs:
             return FAILED
 
     def router(self) -> Router:
-        """Кнопки m:dlg:… и текст партнёра, у которого открыт диалог (команды — мимо)."""
+        """Текст партнёра, у которого открыт диалог (команды — мимо)."""
         router = Router(name="dialogs")
-        router.callback_query.register(self.on_button, F.data.startswith(PREFIX))
         router.message.register(self.on_text, DialogStates.active,
                                 F.text & ~F.text.startswith("/"))
         return router
-
-
-async def _show(message: Message, text: str, markup, edit_: bool) -> Message:
-    if edit_:
-        return await edit(message, text, markup)
-    return await message.answer(text, reply_markup=markup)

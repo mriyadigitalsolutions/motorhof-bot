@@ -8,7 +8,7 @@ from bot import main as bot_main
 from core.dialog import Invalid
 from core.settings import load_settings
 from modules.photos import menu as photos_menu
-from tests.fakes.chat import Partner, alerts, screens
+from tests.fakes.chat import Partner, alerts, keyboards, screens
 from tests.fakes.telegram import ChatBot
 
 ANNA, GROUP = 1, -1001234
@@ -24,26 +24,30 @@ def app(tmp_path):
     a.db.close()
 
 
+DRIVE = [["Форматировать фото"], ["Назад"]]
+
+
 @pytest.mark.parametrize("chat_id", [ANNA, GROUP])
 async def test_photos_started_from_menu(app, chat_id):
     tg = ChatBot()
     anna = Partner(app, tg, ANNA, chat_id)
     await anna.say("/menu")
-    await anna.press("m:menu:open:drive")
-    assert screens(tg)[-1] == ("Google Drive", ["Форматировать фото", "Назад"])
-    await anna.press("m:photos:convert:")
-    assert screens(tg)[-1][0] == "Номер машины: MH_1022, mh1022 или KO_2001"
+    await anna.say("Google Drive")
+    assert (screens(tg)[-1][0], keyboards(tg)[-1]) == ("Google Drive", DRIVE)
+    await anna.say("Форматировать фото")
+    assert (screens(tg)[-1][0], keyboards(tg)[-1]) == (
+        "Номер машины: MH_1022, mh1022 или KO_2001", [["Назад", "Отмена"]])
     await anna.say("Mazda")
     assert screens(tg)[-1][0].startswith("Не похоже на номер машины")
     await anna.say("mh1022")
-    assert screens(tg)[-1] == ("Какие JPEG сделать?",
-                               ["Обычные", "Обычные и полноразмерные", "Назад", "Отмена"])
-    await anna.press("m:dlg:pick:1.1")
-    assert screens(tg)[-1] == (
+    assert (screens(tg)[-1][0], keyboards(tg)[-1]) == (
+        "Какие JPEG сделать?", [["Обычные"], ["Обычные и полноразмерные"], ["Назад", "Отмена"]])
+    await anna.say("Обычные и полноразмерные")
+    assert (screens(tg)[-1][0], keyboards(tg)[-1]) == (
         "Что будет сделано:\nMH_1022: фото из «Фотографии» → JPEG для объявлений и full, "
-        "результат в «Фотографии/На выгрузку».", ["Выполнить", "Назад", "Отмена"])
-    await anna.press("m:dlg:run:")
-    assert screens(tg)[-1] == ("MH_1022: в очереди, позиция 1", [])
+        "результат в «Фотографии/На выгрузку».", [["Выполнить"], ["Назад", "Отмена"]])
+    await anna.say("Выполнить")
+    assert (screens(tg)[-1][0], keyboards(tg)[-1]) == ("MH_1022: в очереди, позиция 1", DRIVE)
     job, = app.queue.status().queued
     assert (job.kind, job.key, job.payload["variants"], job.chat_id, job.telegram_id) == \
         ("photos.convert", "MH_1022", ["full"], chat_id, ANNA)
@@ -53,14 +57,22 @@ async def test_menu_and_command_share_queue_answers(app):
     tg = ChatBot()
     anna = Partner(app, tg, ANNA)
     await anna.say("/fotos MH_1022")
-    await anna.say("/menu")
-    await anna.press("m:photos:convert:")
+    await anna.say("Форматировать фото")
     await anna.say("MH_1022")
-    await anna.press("m:dlg:pick:1.0")
-    await anna.press("m:dlg:run:")
+    await anna.say("Обычные")
+    await anna.say("Выполнить")
     assert screens(tg)[-1][0] == "MH_1022 уже в очереди, позиция 1"
     assert len(app.queue.status().queued) == 1
     assert alerts(tg) == []
+
+
+async def test_cancel_returns_drive_keyboard(app):
+    tg = ChatBot()
+    anna = Partner(app, tg, ANNA)
+    await anna.say("Форматировать фото")
+    await anna.say("Отмена")
+    assert (screens(tg)[-1][0], keyboards(tg)[-1]) == ("Отменено", DRIVE)
+    assert app.queue.status().queued == []
 
 
 @pytest.mark.parametrize("text, code", [("MH_1022", "MH_1022"), ("mh 1022", "MH_1022"), ("ko2001", "KO_2001")])
