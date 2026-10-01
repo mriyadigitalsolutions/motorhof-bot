@@ -55,6 +55,7 @@ class Node:
     dialog: Dialog | None = None
     handler: Handler | None = None
     text: str | None = None
+    seq: int = 0  # порядок объявления: при равном order кнопки идут так, как их объявили
 
     @property
     def callback(self) -> str:
@@ -103,6 +104,11 @@ class Menu:
         self._sections: dict[str, Node] = {}
         self._actions: dict[tuple[str, str], Node] = {}
         self._overrides: dict[str, dict[str, Any]] = {}
+        self._seq = 0
+
+    def _next_seq(self) -> int:
+        self._seq += 1
+        return self._seq
 
     # --- объявление ---------------------------------------------------------
     def scope(self, module: str) -> "ModuleMenu":
@@ -116,7 +122,8 @@ class Menu:
         _check_id(id, "экран")
         if id == ROOT or id in self._sections:
             raise ValueError(f"экран {id!r} уже объявлен")
-        node = Node("section", id, title, parent, order, enabled, module, text=text)
+        node = Node("section", id, title, parent, order, enabled, module, text=text,
+                    seq=self._next_seq())
         check_callback(node.callback)
         self._sections[id] = node
         return node
@@ -129,7 +136,8 @@ class Menu:
             raise ValueError(f"кнопка {module}:{id}: нужен ровно один из dialog или handler")
         if (module, id) in self._actions:
             raise ValueError(f"кнопка {module}:{id} уже объявлена")
-        node = Node("action", id, title, parent, order, enabled, module, dialog, handler)
+        node = Node("action", id, title, parent, order, enabled, module, dialog, handler,
+                    seq=self._next_seq())
         check_callback(node.callback)
         self._actions[(module, id)] = node
         return node
@@ -171,7 +179,7 @@ class Menu:
 
     def children(self, parent: str) -> list[Node]:
         nodes = [n for n in self._nodes() if n.parent == parent]
-        return sorted(nodes, key=lambda n: (self._get(n, "order"), n.title))
+        return sorted(nodes, key=lambda n: (self._get(n, "order"), n.seq))
 
     def screen(self, section_id: str = ROOT) -> Screen:
         if section_id == ROOT:
