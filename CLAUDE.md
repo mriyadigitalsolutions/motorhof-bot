@@ -38,7 +38,7 @@ Telegram-бот MOTORHOF OG: один процесс (aiogram long polling + о�
 bot/            main.py (build/protect/notify, точка входа), auth.py (Access, AccessMiddleware), router.py (/start /help /status /last)
 core/           settings.py, log.py (redact), db.py (SQLite: runs, jobs), queue.py (JobQueue, every_day), drive.py (обёртка rclone)
 modules/        __init__.py — ENABLED и register_all
-  photos/       __init__.py (register), handlers.py (/fotos, задача photos.convert), job.py (цикл машины),
+  photos/       __init__.py (register), handlers.py (/fotos, задача photos.convert), job.py (цикл машины), renumber.py («заново»), store.py, jobs.py,
                 convert.py, exif.py, naming.py, manifest.py, reminders.py + cleanup.py (удаление DNG),
                 variants.yaml, __main__.py (CLI)
   _template/    заготовка модуля (/template, kind _template.echo)
@@ -104,6 +104,7 @@ Dockerfile, docker-compose.yml (сервис photos), .env.example, PLAN.md (с�
 
 - rclone.conf монтируется каталогом `./rclone:/config/rclone`, не файлом: rclone обновляет OAuth-токен переименованием, файл-маунт переименовать нельзя. `RCLONE_CONFIG` задан только в `Dockerfile`.
 - ARG в `Dockerfile` не должны начинаться с `RCLONE_` — rclone прочтёт их как свои флаги (`RELEASE_RCLONE`, `SHA256_RCLONE_ZIP`).
+- `/fotos <код> заново` перенумеровывает «На выгрузку» переименованием (`renumber.py`, `Drive.rename`), без рендера; пока не доведена — в `_manifest.json` поле `renumber` (журнал), доводит её `store.complete` из «заново» или обычного `/fotos`; посторонний файл на целевом имени → `RenumberBlocked`, ничего не перезаписывается. Общие для job/renumber функции — `store.py`, kind и проверка «машина занята» — `jobs.py`.
 - Порядок снимков (`naming.sort_key`) сравнивает время в наивном местном времени процесса: TZ процесса меняет нумерацию.
 - Рендер только через `Manifest.execute(..., render)`: он исключает упавший исходник и пересчитывает план без дыр в номерах; голую пару `plan`/`apply` не использовать.
 - Обработчик задачи завершает её «тихо» (failed без общего «задача упала») через `raise core.queue.JobFailedQuietly(text=None)`; так работает сбой удаления DNG (`DeleteFailed`). Сообщения админу о прерванном удалении ждут `set_sender` (ставится в `router.startup`).

@@ -107,3 +107,11 @@
 - `photos.register(...)` возвращает `Reminders`; `photos.set_sender(fn)`; отправка для ночной проверки — из `router.startup` (aiogram передаёт `bot`). `handlers.make_job(..., on_done=None)`; `bot_sender(bot)`, `make_buttons(service)`, `make_startup(service)`.
 - (доработка 06) `Reminders.interrupted(job) -> str` (on_interrupted для `photos.delete_dng`), `failed_text(code, reason)`, `interrupted_text(code)`; `register(...) -> Reminders`, sender ставится через `.set_sender` возвращённого сервиса (модульного глобала нет); `photos_dng_requests.pending_at` — 7 дней без ответа админа → `expired`. Вопрос считается заданным только после успешной отправки.
 - (доработка 06-2) `expired_text(code, days)`, `DeleteFailed`; задача `photos.delete_dng` ставится с `chat_id=None` (notify бота такие пропускает); сообщения о прерванном удалении откладываются до `set_sender`; схема доводит `pending_at` через ALTER TABLE.
+
+### Из таска 09 — «/fotos <код> заново» (renumber.py, store.py, jobs.py)
+
+- `Drive.rename(src, dst)` — `rclone moveto`, только оба пути прямо в одной «На выгрузку».
+- `modules/photos/store.py`: `JobError` и подклассы, `RenumberBlocked`, `find_car`, `drive_text`, `load_manifest`, `push_manifest`, `complete(drive, out_dir, manifest, present, tmp)`, `TEMP_PREFIX`; `job.*` реэкспортирует.
+- `modules/photos/jobs.py`: `MODULE`, `KIND_CONVERT`, `KIND_DELETE`, `KIND_RENUMBER`, `CAR_KINDS`, `busy(queue, code, kinds=CAR_KINDS)`, `busy_text`.
+- `_manifest.json` пока перенумерация не доведена: поле `renumber` = `{phase: pass1|pass2, count, moves: [[из, временное, в]], nn: {"старый": новый}}`; итог строится из текущего `files` с перестановкой.
+- Кнопки `phr:go|no:<id>`, таблица `photos_renumber_requests`. Тестовые фейки: `tests/fakes/fail_nth.py` (`FailNth`), `tests/fakes/telegram.py` (`FakeBot`).
