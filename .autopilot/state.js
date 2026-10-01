@@ -1,7 +1,7 @@
 window.STATE =
 {
   "slug": "motorhof-bot-photos",
-  "dir": "2026-09-30-motorhof-bot-photos",
+  "dir": "2026-09-30-motorhof-bot-photos--wip",
   "title": "MOTORHOF: Telegram-бот, модуль photos",
   "mode": "interview",
   "depth": "deep",
@@ -11,8 +11,8 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-10-01T09:36:28+00:00",
-  "finishedAt": "2026-10-01T09:36:28+00:00",
+  "updatedAt": "2026-10-01T09:42:41+00:00",
+  "finishedAt": null,
   "stages": [
     {
       "id": "preflight",
@@ -47,28 +47,24 @@ window.STATE =
     },
     {
       "id": "build",
-      "status": "done",
+      "status": "active",
       "startedAt": "2026-09-30T21:12:54+00:00",
-      "note": "дополнение: таск 12 (ссылка)",
-      "finishedAt": "2026-10-01T09:36:28+00:00"
+      "note": "дополнение: таск 13 (OAuth-клиент)"
     },
     {
       "id": "review",
-      "status": "done",
+      "status": "active",
       "startedAt": "2026-09-30T21:21:04+00:00",
-      "note": "дополнение: таск 12 (ссылка)",
-      "finishedAt": "2026-10-01T09:36:28+00:00"
+      "note": "дополнение: таск 13 (OAuth-клиент)"
     },
     {
       "id": "final",
-      "status": "done",
-      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)",
-      "startedAt": "2026-10-01T09:36:28+00:00",
-      "finishedAt": "2026-10-01T09:36:28+00:00"
+      "status": "pending",
+      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)"
     }
   ],
   "requirements": {
-    "total": 59,
+    "total": 60,
     "done": 59,
     "inTicket": 0,
     "inSpec": 0,
@@ -530,6 +526,28 @@ window.STATE =
         "passed": 319,
         "failed": 0
       }
+    },
+    {
+      "id": "13",
+      "title": "README: свой OAuth-клиент Google",
+      "requirements": [
+        "R28",
+        "R35",
+        "D04"
+      ],
+      "blockedBy": [
+        "12"
+      ],
+      "wave": 11,
+      "zone": [
+        "README.md",
+        "docs/adr/"
+      ],
+      "status": "in-progress",
+      "startedAt": "2026-10-01T09:42:41+00:00",
+      "retries": 0,
+      "repairs": 0,
+      "handoffs": 0
     }
   ],
   "singlePass": null,
