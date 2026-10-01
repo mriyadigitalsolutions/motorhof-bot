@@ -1,18 +1,22 @@
 """Меню на нижней клавиатуре, диалоги и /cancel через диспетчер бота (фейковый Telegram):
-личка и группа, экран и сессия по chat_id + user_id, таймаут, запасной роутер."""
+личка и группа, экран и сессия по chat_id + user_id, таймаут, запасной роутер,
+чистый чат (удаление нажатий, принятого ввода и прошлых экранов)."""
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import logging
+
 import pytest
-from aiogram.methods import SendMessage
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
+from aiogram.methods import DeleteMessage, SendMessage
 from aiogram.types import ReplyKeyboardMarkup
 
 from bot import main as bot_main
 from core.dialog import Choice, Dialog, Invalid, Step
 from core.settings import load_settings
 from tests.fakes.chat import Partner as Chat_
-from tests.fakes.chat import alerts, keyboards, reply_to, screens, sent
+from tests.fakes.chat import alerts, deleted, keyboards, msg_ids, reply_to, screens, sent
 from tests.fakes.telegram import ChatBot
 
 ANNA, BORIS, STRANGER, GROUP = 1, 2, 42, -1001234
@@ -359,3 +363,201 @@ async def test_back_with_icon_after_timeout_stays_on_dialog_screen(app, tg):
     await anna.say("⬅️ Назад")
     assert keyboards(tg)[-1] == DEMO
     assert [t for t, _ in screens(tg)].count("Главное меню") == 0
+
+
+# ---------- чистый чат: удаление нажатий, принятого ввода и прошлых экранов ----------
+
+def only(ids):
+    [one] = ids
+    return one
+
+
+async def test_menu_press_deletes_press_and_previous_screen_after_new_screen(app, tg):
+    anna = Chat_(app, tg, ANNA)
+    await anna.say("/menu")
+    menu_cmd, main = anna.last_id, only(msg_ids(tg, "Главное меню"))
+    await anna.say("Демо")
+    demo = only(msg_ids(tg, "Демо"))
+    assert deleted(tg) == [(ANNA, main), (ANNA, anna.last_id)]
+    # сначала новый экран (с клавиатурой), потом удаление старого и нажатия
+    kinds = [type(m).__name__ for m in tg.methods]
+    assert kinds == ["SendMessage", "SendMessage", "DeleteMessage", "DeleteMessage"]
+    assert last(tg) == ("Демо", DEMO)
+    await anna.say("Назад")
+    assert deleted(tg)[-2:] == [(ANNA, demo), (ANNA, anna.last_id)]
+    assert (ANNA, menu_cmd) not in deleted(tg)
+
+
+async def test_notice_is_kept_and_does_not_replace_screen(app, tg):
+    anna = Chat_(app, tg, ANNA)
+    await anna.say("/menu")
+    main = only(msg_ids(tg, "Главное меню"))
+    await anna.say("CRM")
+    assert deleted(tg) == [(ANNA, anna.last_id)]  # только нажатие; экран с клавиатурой остаётся
+    notice = only(msg_ids(tg, "В разработке"))
+    await anna.say("Демо")
+    assert (ANNA, main) in deleted(tg) and (ANNA, notice) not in deleted(tg)
+
+
+async def test_dialog_input_accepted_is_deleted_rejected_is_kept(app, tg):
+    anna = Chat_(app, tg, ANNA)
+    await anna.say("Демо")
+    await anna.say("Спросить")
+    ask_kind = only(msg_ids(tg, "Тип?"))
+    await anna.say("KO")
+    ko = anna.last_id
+    ask_number = only(msg_ids(tg, "Номер?"))
+    assert {(ANNA, ko), (ANNA, ask_kind)} <= set(deleted(tg))
+    await anna.say("abc")
+    abc = anna.last_id
+    hint = only(msg_ids(tg, "Только цифры\n\nНомер?"))
+    assert (ANNA, abc) not in deleted(tg)
+    assert (ANNA, ask_number) in deleted(tg)  # вопрос повторён в подсказке
+    await anna.say("2001")
+    confirm = only(msg_ids(tg, "Что будет сделано:\nПапка KO_2001"))
+    assert (ANNA, anna.last_id) in deleted(tg)
+    await anna.say("Выполнить")
+    assert {(ANNA, anna.last_id), (ANNA, confirm)} <= set(deleted(tg))
+    result = only(msg_ids(tg, "Готово: KO_2001"))
+    await anna.say("Назад")
+    for kept in (abc, hint, result):
+        assert (ANNA, kept) not in deleted(tg)
+    assert last(tg) == ("Главное меню", MAIN)
+
+
+async def test_cancel_button_deleted_cancelled_answer_kept(app, tg):
+    anna = Chat_(app, tg, ANNA)
+    await anna.say("Спросить")
+    ask = only(msg_ids(tg, "Тип?"))
+    await anna.say("Отмена")
+    assert deleted(tg)[-2:] == [(ANNA, ask), (ANNA, anna.last_id)]
+    cancelled = only(msg_ids(tg, "Отменено"))
+    await anna.say("Демо")
+    assert (ANNA, cancelled) not in deleted(tg)
+
+
+async def test_queued_answer_and_commands_are_never_deleted(app, tg):
+    anna = Chat_(app, tg, ANNA)
+    commands = []
+    await anna.say("/menu")
+    commands.append(anna.last_id)
+    await anna.say("Google Drive")
+    await anna.say("Форматировать фото")
+    await anna.say("MH_1022")
+    await anna.say("Обычные")
+    await anna.say("Выполнить")
+    queued = only(msg_ids(tg, "MH_1022: в очереди, позиция 1"))
+    await anna.say("/status")
+    commands.append(anna.last_id)
+    status = msg_ids(tg, last(tg)[0])[-1]
+    await anna.say("/fotos MH_2002")
+    commands.append(anna.last_id)
+    fotos = msg_ids(tg, last(tg)[0])[-1]
+    await anna.say("/menu")
+    commands.append(anna.last_id)
+    await anna.say("Назад")
+    await anna.say("Google Drive")
+    gone = {i for _, i in deleted(tg)}
+    assert not gone & {queued, status, fotos, *commands}
+
+
+async def test_dialog_from_command_keeps_command(app, tg):
+    anna = Chat_(app, tg, ANNA)
+    await anna.say("/neu")
+    neu = anna.last_id
+    await anna.say("/cancel")
+    assert (ANNA, neu) not in deleted(tg) and (ANNA, anna.last_id) not in deleted(tg)
+    assert last(tg)[0] == "Отменено"
+
+
+async def test_timeout_message_kept_menu_press_after_timeout_deleted(app, tg):
+    anna = Chat_(app, tg, ANNA)
+    await anna.say("Спросить")
+    app.clock.now += timedelta(minutes=11)
+    await anna.say("Google Drive")
+    closed = only(msg_ids(tg, "Диалог закрыт: 10 минут без ответа. Начни заново из /menu."))
+    assert (ANNA, anna.last_id) in deleted(tg)
+    await anna.say("Назад")
+    assert (ANNA, closed) not in deleted(tg)
+
+
+async def test_delete_failure_is_ignored(app, tg, caplog):
+    tg.fail_delete = True
+    anna = Chat_(app, tg, ANNA)
+    with caplog.at_level(logging.DEBUG, logger="bot.menu"):
+        await anna.say("/menu")
+        await anna.say("Демо")
+        await anna.say("Спросить")
+        await anna.say("MH")
+        await anna.say("1022")
+        await anna.say("Выполнить")
+    assert last(tg) == ("Готово: MH_1022", DEMO)
+    assert any(isinstance(m, DeleteMessage) for m in tg.methods) and deleted(tg) == []
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any(r.levelno == logging.DEBUG and "удал" in r.getMessage() for r in caplog.records)
+    texts = [t for t, _ in screens(tg)]
+    assert not [t for t in texts if "удал" in t.lower()]
+
+
+async def test_group_reply_then_delete_and_keyboard_stays(app, tg):
+    anna = Chat_(app, tg, ANNA, GROUP)
+    await anna.say("/menu")
+    main = only(msg_ids(tg, "Главное меню"))
+    await anna.say("Демо")
+    press = anna.last_id
+    new = sent(tg)[-1]
+    assert reply_to(new) == press and new.reply_parameters.allow_sending_without_reply
+    assert new.reply_markup.selective and keyboards(tg)[-1] == DEMO
+    assert deleted(tg) == [(GROUP, main), (GROUP, press)]
+    i_send = tg.methods.index(new)
+    i_del = [i for i, m in enumerate(tg.methods)
+             if isinstance(m, DeleteMessage) and m.message_id == press][0]
+    assert i_send < i_del
+    await anna.say("Спросить")
+    await anna.say("MH")
+    await anna.say("x")  # отклонён — остаётся
+    assert (GROUP, anna.last_id) not in deleted(tg)
+
+
+async def test_two_partners_in_group_delete_only_own_screen(app, tg):
+    anna = Chat_(app, tg, ANNA, GROUP, "Анна")
+    boris = Chat_(app, tg, BORIS, GROUP, "Борис")
+    await anna.say("/menu")
+    await boris.say("/menu")
+    anna_main, boris_main = msg_ids(tg, "Главное меню", GROUP)
+    await anna.say("Демо")
+    assert (GROUP, anna_main) in deleted(tg) and (GROUP, boris_main) not in deleted(tg)
+    anna_demo = only(msg_ids(tg, "Демо", GROUP))
+    await boris.say("Спросить")
+    assert (GROUP, boris_main) in deleted(tg) and (GROUP, anna_demo) not in deleted(tg)
+
+
+@pytest.mark.parametrize("error", [
+    lambda m: TelegramNetworkError(m, "сеть недоступна"),
+    lambda m: TelegramRetryAfter(m, "Flood control exceeded", 5),
+    lambda m: RuntimeError("что угодно"),
+], ids=["network", "retry_after", "other"])
+async def test_delete_errors_do_not_break_dialog(app, tg, error, caplog):
+    """Удаление падает при старте диалога и посреди него — шаг всё равно сохранён."""
+    tg.fail_delete = error
+    anna = Chat_(app, tg, ANNA)
+    with caplog.at_level(logging.DEBUG, logger="bot.menu"):
+        await anna.say("/menu")
+        await anna.say("Демо")
+        await anna.say("Спросить")  # старт: удаление экрана «Демо» и нажатия падает
+        assert last(tg) == ("Тип?", [["MH", "KO"], NAV])
+        await anna.say("KO")  # принято шагом «Тип?», не меню и не запасной роутер
+        assert last(tg) == ("Номер?", [NAV])
+        await anna.say("2001")  # посреди диалога
+        assert last(tg) == ("Что будет сделано:\nПапка KO_2001", [["✅ Выполнить"], NAV])
+        await anna.say("Выполнить")
+    assert last(tg) == ("Готово: KO_2001", DEMO)
+    assert app.finished[0][0] == {"kind": "KO", "number": "2001"}
+    assert deleted(tg) == []
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+
+async def test_delete_without_bot_is_ignored():
+    from bot.menu import delete_message
+    assert await delete_message(None, ANNA, 1) is False
+

@@ -139,6 +139,8 @@ class Outcome:
     kind: ask — показать text и клавиатуру keyboard (подписи по рядам); finish — вызвать
     Dialog.finish(values) диалога `dialog`; closed — сессию сбросить и показать text (отмена, таймаут, ошибка).
     keep — сессию сохранить (ask) или сбросить (finish, closed).
+    note — ask после отклонённого ответа (Invalid, «Выбери вариант кнопкой», «Нажми …»):
+    подсказка, с которой начинается text; пусто — ответ принят или шаг показан впервые.
     """
     kind: str
     text: str = ""
@@ -146,6 +148,7 @@ class Outcome:
     values: Values = field(default_factory=dict)
     session: dict | None = None
     dialog: str = ""
+    note: str = ""
 
     @property
     def keep(self) -> bool:
@@ -250,4 +253,4 @@ class Engine:
             rows = layout([c.label for c in step.options(values)], nav)
         if note:
             text = f"{note}\n\n{text}"
-        return Outcome("ask", text, rows, session=session)
+        return Outcome("ask", text, rows, session=session, note=note or "")

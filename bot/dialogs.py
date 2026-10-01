@@ -12,6 +12,11 @@ USER_IN_CHAT — пара chat_id + user_id: в группе у каждого �
 следующем ответе того же партнёра; если этот ответ — кнопка меню, кроме «Назад», она затем
 обрабатывается). /menu и /start закрывают открытый диалог молча (bot/router.py).
 Конец диалога — ответ с клавиатурой экрана, откуда диалог начат.
+
+Чистый чат (bot/menu.py, `present`): вопрос шага и подтверждение — экранные сообщения,
+следующий ответ их удаляет; подсказка об ошибке ввода и итог — нет. Сообщение партнёра
+удаляется, когда ответ принят (вариант, текст прошёл validate, «Назад», «Отмена»,
+«Выполнить»); отклонённый ввод остаётся, чтобы партнёр видел, что ввёл.
 """
 from __future__ import annotations
 
@@ -40,6 +45,12 @@ FAILED = "Не получилось выполнить, попробуй ещё 
 
 class DialogStates(StatesGroup):
     active = State()
+
+
+def _accepted(out: Outcome) -> bool:
+    """Ответ партнёра в диалоге принят: шаг сдвинулся, диалог выполнен или отменён кнопкой."""
+    return ((out.kind == "ask" and not out.note) or out.kind == "finish"
+            or (out.kind == "closed" and out.text == CANCELLED))
 
 
 def utc_now() -> datetime:
@@ -76,17 +87,23 @@ class Dialogs:
         # состояния движок не меняет.
         out = await asyncio.to_thread(self.engine.text, session, text, self.clock())
         await self._apply(out, message, state, message.from_user)
-        if (out.kind == "closed" and out.text == EXPIRED and self.menu is not None
-                and self.menu.is_label(text) and normalize_label(text) != normalize_label(BACK_LABEL)):
-            # диалог закрыт таймаутом, а партнёр нажал кнопку меню — обработать нажатие;
-            # «Назад» — нет: партнёр остаётся на экране, откуда начат диалог
+        expired_label = (out.kind == "closed" and out.text == EXPIRED and self.menu is not None
+                         and self.menu.is_label(text))
+        if expired_label and normalize_label(text) != normalize_label(BACK_LABEL):
+            # диалог закрыт таймаутом, а партнёр нажал кнопку меню — обработать нажатие
+            # (handle_label его и удалит); «Назад» — нет: партнёр остаётся на экране,
+            # откуда начат диалог
             await menu_mod.handle_label(message, state, self.menu, self)
+        elif expired_label or _accepted(out):
+            await menu_mod.delete_press(message)
 
     async def _apply(self, out: Outcome, message: Message, state: FSMContext, user) -> None:
         if out.kind == "ask":
-            await menu_mod.answer(message, out.text, out.keyboard)
-            await state.set_state(DialogStates.active)
-            await state.update_data({KEY: dict(out.session or {})})
+            # с подсказкой об ошибке — не экран: остаётся рядом с отклонённым вводом
+            # шаг сохраняется в present до удаления старого экрана
+            await menu_mod.present(message, state, out.text, out.keyboard, screen=not out.note,
+                                   fsm_state=DialogStates.active,
+                                   data={KEY: dict(out.session or {})})
             return
         if out.kind == "finish":
             text = await self._finish(out, menu_mod.context(user, message.chat.id))
@@ -97,8 +114,7 @@ class Dialogs:
     async def _close(self, message: Message, state: FSMContext, text: str) -> None:
         """Сбросить диалог и ответить text с клавиатурой экрана, откуда диалог начат."""
         screen = (await state.get_data()).get(RETURN_KEY) or menu_mod.ROOT
-        await state.set_state(None)
-        await state.set_data({})
+        await menu_mod.reset(state)
         if self.menu is None:
             await menu_mod.answer(message, text)
             return

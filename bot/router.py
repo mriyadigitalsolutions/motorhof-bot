@@ -107,9 +107,9 @@ def make_router(queue: JobQueue, db: Database, tz: str, module_help: Iterable[st
         if menu is None:
             await message.answer(help_message)
         else:
-            # открытый диалог закрывается молча: иначе следующая кнопка меню ушла бы в диалог
-            await state.set_state(None)
-            await state.set_data({})
+            # открытый диалог закрывается молча: иначе следующая кнопка меню ушла бы в диалог;
+            # номер прошлого экрана сохраняется — новое меню его удалит
+            await menu_mod.reset(state)
             await menu_mod.show(message, menu, state)
 
     @router.message(Command("cancel"))

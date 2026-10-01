@@ -25,12 +25,18 @@ class FakeBot:
 
 class ChatBot(FakeBot):
     """FakeBot, который отвечает как Telegram: sendMessage и editMessageText возвращают
-    сообщение бота с номером (по нему диалог узнаёт свой экран)."""
+    сообщение бота с номером (по нему диалог узнаёт свой экран). deleteMessage копит
+    (chat_id, message_id) в `deleted`; `fail_delete = True` — Telegram отказывает
+    (TelegramBadRequest, как без права «Удалять сообщения» или для сообщения старше 48 ч);
+    `fail_delete = <функция(method) -> исключение>` — бросить это исключение (сеть, RetryAfter)."""
 
     def __init__(self, username: str = BOT_USERNAME) -> None:
         super().__init__(username)
         self._next_id = 5000
         self._last: dict[int, int] = {}
+        self.deleted: list[tuple[int, int]] = []
+        self.outgoing: list[tuple[int, int, str]] = []  # (chat_id, message_id, text) отправок
+        self.fail_delete = False
 
     def last_screen(self, chat_id: int) -> int:
         """Номер последнего сообщения бота, отправленного или изменённого в чате."""
@@ -39,14 +45,23 @@ class ChatBot(FakeBot):
     async def __call__(self, method, request_timeout=None):
         from datetime import datetime
 
-        from aiogram.methods import EditMessageText, SendMessage
+        from aiogram.exceptions import TelegramBadRequest
+        from aiogram.methods import DeleteMessage, EditMessageText, SendMessage
         from aiogram.types import Chat, InlineKeyboardMarkup, Message
 
         self.methods.append(method)
+        if isinstance(method, DeleteMessage):
+            if callable(self.fail_delete):
+                raise self.fail_delete(method)
+            if self.fail_delete:
+                raise TelegramBadRequest(method, "Bad Request: message can't be deleted")
+            self.deleted.append((method.chat_id, method.message_id))
+            return True
         if isinstance(method, (SendMessage, EditMessageText)):
             if isinstance(method, SendMessage):
                 self._next_id += 1
                 message_id = self._next_id
+                self.outgoing.append((method.chat_id, message_id, method.text))
             else:
                 message_id = method.message_id
             chat_id = method.chat_id

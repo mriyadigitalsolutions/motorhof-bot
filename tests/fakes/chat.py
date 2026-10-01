@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from aiogram.methods import AnswerCallbackQuery, EditMessageText, SendMessage
+from aiogram.methods import AnswerCallbackQuery, DeleteMessage, EditMessageText, SendMessage
 from aiogram.types import (CallbackQuery, Chat, InlineKeyboardMarkup, Message,
                            ReplyKeyboardMarkup, Update, User)
 
@@ -76,3 +76,13 @@ def alerts(bot):
     return [m.text for m in bot.methods if isinstance(m, AnswerCallbackQuery) and m.text]
 
 
+def deleted(bot):
+    """Удалённые ботом сообщения (chat_id, message_id) по порядку (ChatBot: только удачные)."""
+    if hasattr(bot, "deleted"):
+        return list(bot.deleted)
+    return [(m.chat_id, m.message_id) for m in bot.methods if isinstance(m, DeleteMessage)]
+
+
+def msg_ids(bot, text, chat_id=None):
+    """Номера сообщений бота (ChatBot) с текстом text, по порядку; chat_id — только в этом чате."""
+    return [i for c, i, t in bot.outgoing if t == text and (chat_id is None or c == chat_id)]

@@ -17,21 +17,35 @@
 (ключ "screen" в данных FSM, пара chat_id + user_id) нужен только «Назад»: без него —
 главное меню. В группе ответ — reply на сообщение партнёра, клавиатура `selective`:
 Telegram показывает её только ему. Старые inline-кнопки `m:…` отвечают «Кнопка устарела».
+
+Чистый чат (решение заказчика 2026-10-01, ADR 0008): нажатие кнопки меню бот удаляет после
+ответа; экранное сообщение (экран меню, вопрос шага диалога, подтверждение) — когда тому же
+партнёру в том же чате показан следующий ответ с клавиатурой (`present`). Номер последнего
+экрана — ключ "screen_msg" в данных FSM. Итоговые ответы (результат действия, «Отменено»,
+«Диалог закрыт…», подсказка об ошибке ввода, «В разработке», ответы команд) экраном не
+считаются и не удаляются; команды партнёра тоже. Порядок — сначала новый ответ (в группе —
+reply с allow_sending_without_reply, клавиатура остаётся у партнёра), потом удаление.
+Удаление best-effort (`delete_message`): в группе боту нужен админ с правом «Удалять
+сообщения»; отказ Telegram — только DEBUG в лог.
 """
 from __future__ import annotations
 
 import inspect
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Union
 
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
+from aiogram.methods import DeleteMessage
 from aiogram.types import (CallbackQuery, KeyboardButton, Message, ReplyKeyboardMarkup,
                            ReplyParameters)
 
 from core.dialog import (BACK_LABEL, CANCEL_LABEL, RUN_LABEL, Context, Dialog, layout,
                          normalize_label)
+
+log = logging.getLogger(__name__)
 
 ROOT = "root"
 ROOT_TITLE = "Главное меню"
@@ -42,6 +56,7 @@ EMPTY = "Здесь пока ничего нет"
 UNKNOWN = "Кнопка устарела, открой /menu"
 BACK = BACK_LABEL
 SCREEN_KEY = "screen"
+SCREEN_MSG_KEY = "screen_msg"  # номер последнего экранного сообщения бота этому партнёру
 SERVICE_LABELS = {normalize_label(x) for x in (BACK_LABEL, CANCEL_LABEL, RUN_LABEL)}
 GROUP_TYPES = {"group", "supergroup"}
 
@@ -308,13 +323,66 @@ async def answer(message: Message, text: str, rows: Rows | None = None) -> Messa
     return await message.answer(text, **kwargs)
 
 
+async def delete_message(bot, chat_id: int, message_id: int) -> bool:
+    """Удалить сообщение, best-effort: нет права «Удалять сообщения» в группе, сообщение
+    старше 48 ч или уже удалено, сеть, RetryAfter, нет bot — DEBUG в лог, партнёру ничего.
+    Никогда не бросает: удаление не должно ронять обработчик. True — удалено."""
+    try:
+        await bot(DeleteMessage(chat_id=chat_id, message_id=message_id))
+        return True
+    except Exception as e:  # любая ошибка удаления (TelegramAPIError и прочее) — не повод падать
+        log.debug("не удалось удалить сообщение %s в чате %s: %s: %s",
+                  message_id, chat_id, type(e).__name__, e)
+        return False
+
+
+async def delete_press(message: Message) -> None:
+    """Удалить сообщение партнёра — нажатие кнопки или принятый ввод (после ответа на него)."""
+    await delete_message(message.bot, message.chat.id, message.message_id)
+
+
+async def present(message: Message, state: FSMContext | None, text: str, rows: Rows | None,
+                  *, screen: bool = True, fsm_state: Any = None,
+                  data: dict[str, Any] | None = None) -> Any:
+    """Ответ с клавиатурой rows; прошлый экран этого партнёра в этом чате удаляется после
+    отправки (клавиатура уже пришла с новым). screen=False — итоговый ответ: он остаётся
+    навсегда и следующий экран его не удалит. Без rows — обычный answer, экран не меняется.
+    fsm_state и data (состояние и данные FSM вызывающего, например шаг диалога) сохраняются
+    до удаления: порядок «отправить новое → сохранить состояние → удалить старое»."""
+    sent = await answer(message, text, rows)
+    if state is None:
+        return sent
+    if fsm_state is not None:
+        await state.set_state(fsm_state)
+    if data:
+        await state.update_data(data)
+    if not rows:
+        return sent
+    old = (await state.get_data()).get(SCREEN_MSG_KEY)
+    new = sent.message_id if isinstance(sent, Message) else None
+    await state.update_data({SCREEN_MSG_KEY: new if screen else None})
+    if old and old != new:
+        await delete_message(message.bot, message.chat.id, old)
+    return sent
+
+
+async def reset(state: FSMContext) -> None:
+    """Сбросить состояние и данные FSM партнёра (диалог, экран), кроме номера последнего
+    экранного сообщения: следующий экран его удалит."""
+    keep = (await state.get_data()).get(SCREEN_MSG_KEY)
+    await state.set_state(None)
+    await state.set_data({SCREEN_MSG_KEY: keep} if keep else {})
+
+
 async def show_screen(message: Message, menu: Menu, state: FSMContext | None,
                       screen_id: str = ROOT, text: str | None = None) -> None:
-    """Экран screen_id (его клавиатура) и запомнить его как текущий; text — вместо текста экрана."""
+    """Экран screen_id (его клавиатура) и запомнить его как текущий; text — итоговый ответ
+    вместо текста экрана (с клавиатурой экрана, но не экран: не удаляется)."""
     if not menu.has_screen(screen_id):
         screen_id = ROOT
     screen = menu.screen(screen_id)
-    await answer(message, screen.text if text is None else text, screen.rows)
+    await present(message, state, screen.text if text is None else text, screen.rows,
+                  screen=text is None)
     if state is not None:
         await state.update_data({SCREEN_KEY: screen_id})
 
@@ -325,7 +393,8 @@ async def show(message: Message, menu: Menu, state: FSMContext | None = None) ->
 
 
 async def handle_label(message: Message, state: FSMContext, menu: Menu, dialogs) -> bool:
-    """Текст сообщения как нажатие кнопки меню; False — это не кнопка меню."""
+    """Текст сообщения как нажатие кнопки меню; False — это не кнопка меню. Нажатие
+    удаляется после ответа."""
     current = (await state.get_data()).get(SCREEN_KEY)
     press = menu.press_label(message.text, current)
     if press.kind == "none":
@@ -340,6 +409,7 @@ async def handle_label(message: Message, state: FSMContext, menu: Menu, dialogs)
     else:
         text = await call(press.node.handler, context(message.from_user, message.chat.id))
         await show_screen(message, menu, state, press.screen_id, text=text)
+    await delete_press(message)
     return True
 
 
