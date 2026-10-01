@@ -64,3 +64,11 @@ async def test_private_chat_still_asks_admin_privately(base, service, clock, out
     await service.check()
     await service.press(dict(outbox.buttons(PARTNER))["Удалить"], PARTNER, "Анна", Access(), PARTNER)
     assert outbox.to(ADMIN) == [ADMIN_ASK]
+
+
+async def test_group_or_private_decided_by_request_chat(base, service, clock, outbox):
+    """Где спрашивать админа — по чату вопроса (req.chat_id), а не по чату нажатия."""
+    buttons = await _asked_in_group(base, service, clock, outbox)
+    await service.press(buttons["Удалить"], PARTNER, "Анна", Access())  # чат нажатия неизвестен
+    assert ADMIN_ASK in outbox.to(GROUP)
+    assert outbox.to(ADMIN) == []

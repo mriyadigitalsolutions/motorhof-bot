@@ -1,7 +1,7 @@
 window.STATE =
 {
   "slug": "motorhof-bot-photos",
-  "dir": "2026-09-30-motorhof-bot-photos--wip",
+  "dir": "2026-09-30-motorhof-bot-photos",
   "title": "MOTORHOF: Telegram-бот, модуль photos",
   "mode": "interview",
   "depth": "deep",
@@ -11,8 +11,8 @@ window.STATE =
   "memoryFile": "CLAUDE.md",
   "skillDir": "/root/.claude/skills/synced/5c3b6cbe-9ff1-494c-86b3-124dc96d8b12_549fa9a7-7f53-44be-b352-3173fe8f80cc/autopilot",
   "startedAt": "2026-09-30T20:46:42+00:00",
-  "updatedAt": "2026-10-01T08:16:52+00:00",
-  "finishedAt": null,
+  "updatedAt": "2026-10-01T08:27:29+00:00",
+  "finishedAt": "2026-10-01T08:27:29+00:00",
   "stages": [
     {
       "id": "preflight",
@@ -47,26 +47,30 @@ window.STATE =
     },
     {
       "id": "build",
-      "status": "active",
+      "status": "done",
       "startedAt": "2026-09-30T21:12:54+00:00",
-      "note": "дополнение: таск 10 (группы)"
+      "note": "дополнение: таск 10 (группы)",
+      "finishedAt": "2026-10-01T08:27:29+00:00"
     },
     {
       "id": "review",
-      "status": "active",
+      "status": "done",
       "startedAt": "2026-09-30T21:21:04+00:00",
-      "note": "дополнение: таск 10 (группы)"
+      "note": "дополнение: таск 10 (группы)",
+      "finishedAt": "2026-10-01T08:27:29+00:00"
     },
     {
       "id": "final",
-      "status": "pending",
-      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)"
+      "status": "done",
+      "note": "слепая приёмка: 14/14 брифа, 1 вопрос («заново»)",
+      "startedAt": "2026-10-01T08:27:29+00:00",
+      "finishedAt": "2026-10-01T08:27:29+00:00"
     }
   ],
   "requirements": {
     "total": 57,
-    "done": 56,
-    "inTicket": 1,
+    "done": 57,
+    "inTicket": 0,
     "inSpec": 0,
     "placeholder": 0,
     "deferred": 0,
@@ -460,16 +464,21 @@ window.STATE =
         "modules/photos/",
         "tests/"
       ],
-      "status": "in-progress",
+      "status": "done",
       "startedAt": "2026-10-01T08:16:52+00:00",
       "retries": 0,
-      "repairs": 0,
-      "handoffs": 0
+      "repairs": 1,
+      "handoffs": 0,
+      "finishedAt": "2026-10-01T08:27:29+00:00",
+      "tests": {
+        "passed": 306,
+        "failed": 0
+      }
     }
   ],
   "singlePass": null,
   "tests": {
-    "passed": 290,
+    "passed": 306,
     "failed": 0,
     "skipped": 1
   },
@@ -523,7 +532,8 @@ window.STATE =
     "08 · handlers.register — таблица photos_job_runs гарантируется порядком вызова фабрик, а не явным ensure_schema",
     "08 · core/settings.py:41 — значение в кавычках с комментарием после (\"a #b\" # c) режется вместе с кавычкой",
     "09 · modules/photos/store.py:64-100 — лишние пустые строки между функциями",
-    "09 · job.py:117 — реэкспорт ошибок из store (noqa F401)"
+    "09 · job.py:117 — реэкспорт ошибок из store (noqa F401)",
+    "10 · сохранённый chat_id группы может умереть (группа стала супергруппой / бот удалён) — вопрос про DNG молча не уходит до следующего /fotos"
   ],
   "reviewers": {
     "manifestSpec": "abc0acae4069042f5",

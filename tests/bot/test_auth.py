@@ -67,19 +67,6 @@ async def test_partner_passes():
     assert h.calls == 4
 
 
-async def test_group_message_without_sender_silent(caplog):
-    """Анонимный админ группы / пост от имени чата: from_user нет — молчание."""
-    h = Handler()
-    mw = AccessMiddleware(Access(settings()))
-    event = Message(message_id=1, date=datetime(2026, 9, 30), text="/fotos MH_1022 секрет",
-                    chat=Chat(id=-100, type="supergroup"),
-                    sender_chat=Chat(id=-100, type="supergroup"))
-    with caplog.at_level(logging.INFO):
-        assert await mw(h, event, {}) is None
-    assert h.calls == 0
-    assert "/fotos" in caplog.text and "секрет" not in caplog.text
-
-
 @pytest.mark.parametrize("event,command", [
     (message(42, "/fotos MH_1022 секрет"), "/fotos"),
     (message(42, "привет, секрет"), "текст"),
@@ -90,12 +77,61 @@ async def test_group_message_without_sender_silent(caplog):
 async def test_stranger_silent_and_logged(event, command, caplog):
     h = Handler()
     mw = AccessMiddleware(Access(settings()))
-    with caplog.at_level(logging.INFO):
+    with caplog.at_level(logging.DEBUG):
         assert await mw(h, event, {}) is None
     assert h.calls == 0
     line = caplog.records[-1].getMessage()
     assert str(event.from_user.id) in line and command in line
     assert "секрет" not in caplog.text and "MH_1022" not in line
+
+
+GROUP_CHAT = Chat(id=-100, type="supergroup")
+ANON_ADMIN = User(id=1087968824, is_bot=True, first_name="Group", username="GroupAnonymousBot")
+
+
+async def test_anonymous_group_admin_silent(caplog):
+    """Анонимный админ группы: from_user = GroupAnonymousBot, sender_chat = сама группа."""
+    h = Handler()
+    mw = AccessMiddleware(Access(settings()))
+    event = Message(message_id=1, date=datetime(2026, 9, 30), text="/fotos MH_1022 секрет",
+                    chat=GROUP_CHAT, from_user=ANON_ADMIN, sender_chat=GROUP_CHAT)
+    with caplog.at_level(logging.INFO):
+        assert await mw(h, event, {}) is None
+    assert h.calls == 0
+    assert "1087968824" in caplog.text and "/fotos" in caplog.text and "секрет" not in caplog.text
+
+
+async def test_group_chatter_of_stranger_not_warned(caplog):
+    """Privacy выключен — бот видит всю переписку группы: обычный текст чужого не WARNING,
+    а команды и кнопки — WARNING."""
+    h = Handler()
+    mw = AccessMiddleware(Access(settings()))
+    with caplog.at_level(logging.DEBUG):
+        assert await mw(h, message(42, "привет всем", chat_type="supergroup"), {}) is None
+        assert await mw(h, message(42, "/status", chat_type="supergroup"), {}) is None
+    assert h.calls == 0
+    levels = [(r.levelname, "/status" in r.getMessage()) for r in caplog.records]
+    assert levels == [("DEBUG", False), ("WARNING", True)]
+
+
+async def test_stranger_edited_message_and_inaccessible_callback_in_group(caplog):
+    from aiogram.types import InaccessibleMessage, Update
+
+    edited = Update(update_id=1, edited_message=message(42, "/fotos MH_1022 секрет",
+                                                        chat_type="supergroup"))
+    cb = Update(update_id=2, callback_query=CallbackQuery(
+        id="q", chat_instance="c", data="ph:ok:1",
+        from_user=User(id=42, is_bot=False, first_name="X"),
+        message=InaccessibleMessage(chat=GROUP_CHAT, message_id=5)))
+    h = Handler()
+    mw = AccessMiddleware(Access(settings()))
+    with caplog.at_level(logging.INFO):
+        assert await mw(h, edited, {}) is None
+        assert await mw(h, cb, {}) is None
+    assert h.calls == 0
+    warned = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warned) == 2 and "/fotos" in warned[0] and "кнопка" in warned[1]
+    assert "секрет" not in caplog.text
 
 
 def dispatcher_with_everything(access):

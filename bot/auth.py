@@ -2,9 +2,11 @@
 
 AccessMiddleware ставится outer-middleware на dp.update (bot.main.protect) — до любого наблюдателя,
 для всех типов апдейтов. Пропускается апдейт из личного чата, группы или супергруппы, если
-отправитель (from_user) — партнёр; чужой отправитель, апдейт без отправителя (канал, анонимный
-админ группы) или без чата (inline) — поглощается без ответа, в лог строка с ID и командой
-(без текста).
+отправитель (from_user) — партнёр. Чужой отправитель, апдейт без отправителя (пост канала)
+или без чата (inline) поглощается без ответа. Анонимный админ группы приходит с from_user =
+GroupAnonymousBot (1087968824) и sender_chat = сама группа — это не партнёр, тоже молчание.
+В лог — строка с ID и командой (без текста): WARNING для команд («/…») и кнопок, DEBUG для
+прочего — при выключенном /setprivacy бот видит всю переписку группы.
 """
 from __future__ import annotations
 
@@ -75,10 +77,11 @@ class AccessMiddleware(BaseMiddleware):
     async def __call__(self, handler: Callable[[TelegramObject, dict[str, Any]], Awaitable[Any]],
                        event: TelegramObject, data: dict[str, Any]) -> Any:
         uid, chat_type, command = _describe(event)
+        level = logging.WARNING if command.startswith("/") or command == "кнопка" else logging.DEBUG
         if chat_type not in CHAT_TYPES:
-            log.warning("отказ: чат %s не принимается, id=%s, команда=%s", chat_type, uid, command)
+            log.log(level, "отказ: чат %s не принимается, id=%s, команда=%s", chat_type, uid, command)
             return None
         if not self.access.is_partner(uid):
-            log.warning("отказ: чужой id=%s, команда=%s", uid, command)
+            log.log(level, "отказ: чужой id=%s, команда=%s", uid, command)
             return None
         return await handler(event, data)

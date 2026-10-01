@@ -441,7 +441,7 @@ class Reminders:
         self._update_car(req.code, state="pending_admin")
         # в группе — один вопрос в неё же (видно всем, нажать может только админ);
         # в личке — каждому админу в его личный чат (ID чата = ID админа)
-        for admin in ([chat_id] if is_group(chat_id) else admins):
+        for admin in ([req.chat_id] if is_group(req.chat_id) else admins):
             await self._send(admin, admin_text(req.code, req.dng_count, req.dng_bytes, user_name),
                              [("Подтвердить", f"{PREFIX}:ok:{req.id}"), ("Отменить", f"{PREFIX}:no:{req.id}")])
         await self._send(chat_id, TEXT_SENT_TO_ADMIN)
