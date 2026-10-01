@@ -382,6 +382,18 @@ def test_readme_warns_about_oauth_testing_mode_and_og_accounts():
         assert needle in text, f"README: нет «{needle}»"
 
 
+def test_readme_own_oauth_client_and_rate_limit_check():
+    # ADR 0007: встроенный client_id rclone упирается в общую квоту — нужен свой клиент Internal
+    text = read("README.md")
+    for needle in (
+        "Google Drive API", "Internal", "Desktop app", "myaccount.google.com/permissions",
+        "Already have a token - refresh?",
+        "rclone lsjson motorhof:MOTORHOF_AUTO --dirs-only -vv 2>&1 >/dev/null | grep -ciE 'rate ?limit|403'",
+    ):
+        assert needle in text, f"README: нет «{needle}»"
+    assert "оставить пустыми" not in text, "встроенный клиент rclone больше не советуем"
+
+
 def test_readme_states_server_architecture():
     text = read("README.md")
     for needle in ("x86_64", "CX22", "linux-amd64"):

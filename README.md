@@ -43,7 +43,20 @@ Dockerfile, docker-compose.yml, .env.example
    `docker compose` (он указан в `env_file`). Значения впишем в шаге 7.
 4. **Бот**: в Telegram с аккаунта OG написать `@BotFather` → `/newbot` → сохранить токен.
 5. **Telegram-ID** трёх партнёров: каждый пишет `@userinfobot`, тот отвечает числом.
-6. **rclone** — на сервере ставить не нужно, он есть в образе. Конфиг создаётся прямо из контейнера:
+6. **Свой OAuth-клиент Google** (один раз, в браузере, под `office@motorhof.at`). Встроенный
+   client_id rclone делит квоту со всеми пользователями rclone в мире и упирается в
+   `403 … rateLimitExceeded` — листинг 18 с вместо 1–2, 25 файлов за 42 мин (почему — `docs/adr/0007-own-google-oauth-client.md`).
+   В https://console.cloud.google.com (интерфейс на английском):
+   - создать проект (например `motorhof-bot`) в организации motorhof.at — проект OG, не личный;
+   - **APIs & Services → Library → Google Drive API → Enable**;
+   - **Google Auth Platform → Get started**: имя приложения, почта поддержки `office@motorhof.at`,
+     **Audience: Internal** (только аккаунты Workspace motorhof.at; ни проверки Google, ни 7-дневного
+     срока токена, своя квота);
+   - **Clients → Create client → Desktop app** → Create. Показанные Client ID и Client secret
+     вписать в `rclone config` на сервере (ниже) — и больше никуда: ни в `.env`, ни в git,
+     ни в чат. Они хранятся только в `rclone/rclone.conf`.
+
+   **rclone** — на сервере ставить не нужно, он есть в образе. Конфиг создаётся прямо из контейнера:
 
    ```
    mkdir -p rclone
@@ -56,13 +69,13 @@ Dockerfile, docker-compose.yml, .env.example
    Ответы в диалоге:
    - `n` (New remote), имя — `motorhof`;
    - Storage — `drive` (Google Drive);
-   - `client_id` и `client_secret` — **оставить пустыми** (встроенный клиент rclone, см. ниже);
+   - `client_id` и `client_secret` — Client ID и Client secret своего клиента (см. выше);
    - scope — `1` (drive, полный доступ);
    - `service_account_file` — пусто; «Edit advanced config?» — `n`;
    - «Use web browser to automatically authenticate?» — **`n`** (на сервере нет браузера).
-     rclone попросит выполнить на компьютере с браузером команду `rclone authorize "drive"`.
-     На этом компьютере поставить rclone с https://rclone.org/downloads/ (сервер для этого не нужен),
-     выполнить `rclone authorize "drive"`, войти под `office@motorhof.at`, скопировать
+     rclone покажет команду вида `rclone authorize "drive" "…"` (во втором аргументе — ваш клиент).
+     На компьютере с браузером поставить rclone с https://rclone.org/downloads/ (сервер для этого не нужен),
+     выполнить эту команду целиком, войти под `office@motorhof.at`, скопировать
      выведенный токен (строка `{...}` целиком) и вставить её в диалог на сервере;
    - «Configure this as a Shared Drive (Team Drive)?» — **`y`** (`team_drive`), выбрать общий диск
      MOTORHOF из списка;
@@ -74,11 +87,25 @@ Dockerfile, docker-compose.yml, .env.example
    Монтируется каталог `rclone/`, а не сам файл: rclone сохраняет обновлённый токен переименованием
    файла, а смонтированный отдельно файл переименовать нельзя.
 
-   **Важно про OAuth (PLAN §8).** Если в `client_id` вписать собственный OAuth-клиент Google,
-   а его консент-экран оставлен в режиме **Testing**, refresh-token умирает через **7 дней** —
-   бот молча перестаёт видеть Drive. Поэтому: либо встроенный клиент rclone (пустые `client_id`
-   и `client_secret`, как выше), либо свой клиент, но консент-экран сразу перевести в **Production**.
-   Клиент в Google Cloud — тоже в проекте OG, не личном.
+   **Сменить клиент у уже настроенного remote** (было с пустым `client_id`):
+
+   ```
+   docker compose run --rm --no-deps photos rclone config
+   ```
+
+   `e` (Edit) → `motorhof` → `client_id` → `client_secret` → Enter на остальное (scope и прочее
+   остаются) → «Edit advanced config?» `n` → «Already have a token - refresh?» **`y`** →
+   «Use web browser to automatically authenticate?» `n` → выполнить показанную
+   `rclone authorize "drive" "…"` на компьютере с браузером, вставить токен → «Configure this as
+   a Shared Drive (Team Drive)?» `y` → тот же общий диск MOTORHOF → «Keep this remote?» `y` → `q`.
+   Затем `docker compose up -d` (перезапуск с новым конфигом) и проверка «Если медленно» ниже.
+   Старый доступ через встроенный клиент отозвать: https://myaccount.google.com/permissions
+   (под `office@motorhof.at`) → rclone → удалить доступ.
+
+   **Важно про OAuth (PLAN §8).** Срок жизни refresh-token **7 дней** бывает только у клиента
+   с аудиторией **External** в режиме **Testing**: тогда бот через неделю молча перестаёт видеть
+   Drive. У клиента **Internal** (как выше) такого срока нет. Если когда-нибудь клиент окажется
+   External — перевести его в **Production** сразу.
 7. Вписать значения в `.env` (см. ниже). `.env` и `rclone/` в `.gitignore`,
    в образ не попадают (`.dockerignore`, в том числе вложенные `.env*` и `rclone.conf*`),
    их содержимое никуда не печатать.
@@ -131,15 +158,30 @@ rclone v1.71.1 для `linux-amd64` из официального релиза G
    Печатает отчёт; код выхода 0 — готово, 1 — ошибка задачи, 2 — ошибка аргументов, 3 — манифест повреждён.
 3. Reboot-тест: `sudo reboot`, после загрузки `/status` в Telegram должен ответить сам.
 4. Секреты не попали в git (PLAN §8, пре-деплой):
-   `git log -p --all -- . ':(exclude)tests' ':(exclude).autopilot' | grep -nE '[0-9]{8,10}:[A-Za-z0-9_-]{35}|ya29\.|1//0|GOCSPX-'`
+   `git log -p --all -- . ':(exclude)tests' ':(exclude).autopilot' | grep -nE '[0-9]{8,10}:[A-Za-z0-9_-]{35}|ya29\.|1/[/]0|GOCSPX[-]'`
    должен ничего не вывести (токен Telegram, access/refresh-токен Google, секрет OAuth-клиента;
    в `tests/` и `.autopilot/` лежат заведомо фальшивые примеры для фильтра логов, их и исключаем), и
    `git log --all --name-only --format= | grep -E '(^|/)(\.env|rclone\.conf)'` — только `.env.example`.
    Нашлось — токен перевыпустить (BotFather `/revoke`, заново `rclone config`), историю не «чинить» молча.
-5. После приёмки (всё выше прошло, партнёры проверили фото): `git tag v1.0 && git push origin v1.0`,
+5. Квоты Drive: `docker compose exec -T photos rclone lsjson motorhof:MOTORHOF_AUTO --dirs-only -vv 2>&1 >/dev/null | grep -ciE 'rate ?limit|403'`
+   должно вывести `0` (подробнее — «Если медленно»).
+6. После приёмки (всё выше прошло, партнёры проверили фото): `git tag v1.0 && git push origin v1.0`,
    ссылку на репозиторий записать в документацию проекта.
-6. Локальная конвертация без Drive (на своей машине или в контейнере):
+7. Локальная конвертация без Drive (на своей машине или в контейнере):
    `python -m modules.photos --in <папка> --out <папка> --mh MH_1022 [--variant full]`.
+
+## Если медленно
+
+Норма: листинг корня за 1–2 с, `/fotos` машины на 25 снимков — минуты.
+
+```
+docker compose exec -T photos rclone lsjson motorhof:MOTORHOF_AUTO --dirs-only -vv 2>&1 >/dev/null | grep -ciE 'rate ?limit|403'
+time docker compose exec -T photos rclone lsjson motorhof:MOTORHOF_AUTO --dirs-only >/dev/null
+```
+
+Первая должна вывести `0`, вторая — `real` около 1–2 с. Число больше нуля и десятки секунд —
+Google режет запросы по квоте (`403 … rateLimitExceeded`, rclone ждёт и повторяет). Почти всегда
+это встроенный client_id rclone: завести свой клиент и поменять его у remote (шаг 6 настройки).
 
 ## Команды бота
 
