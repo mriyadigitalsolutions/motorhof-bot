@@ -97,7 +97,7 @@ class Outcome:
     """Что сделать боту.
 
     kind: ask — показать text и buttons; finish — вызвать
-    Dialog.finish(values); closed — сессию сбросить и показать text (отмена, таймаут, ошибка).
+    Dialog.finish(values) диалога `dialog`; closed — сессию сбросить и показать text (отмена, таймаут, ошибка).
     keep — сессию сохранить (ask) или сбросить (finish, closed).
     """
     kind: str
@@ -105,6 +105,7 @@ class Outcome:
     buttons: list[list[Button]] = field(default_factory=list)
     values: Values = field(default_factory=dict)
     session: dict | None = None
+    dialog: str = ""
 
     @property
     def keep(self) -> bool:
@@ -180,7 +181,7 @@ class Engine:
         if action == "run":
             if idx < len(d.steps):
                 return Outcome("ask", STALE, session=session)
-            return Outcome("finish", values=dict(session["values"]))
+            return Outcome("finish", values=dict(session["values"]), dialog=d.id)
         if action == "pick":
             step_no, _, choice_no = arg.partition(".")
             if step_no != str(idx) or idx >= len(d.steps):
@@ -213,7 +214,7 @@ class Engine:
         session = self._touch(dict(session, values=values, step=session["step"] + 1), now)
         if session["step"] < len(d.steps) or d.confirm is not None:
             return self._show(d, session)
-        return Outcome("finish", values=values)
+        return Outcome("finish", values=values, dialog=d.id)
 
     def _show(self, d: Dialog, session: dict, note: str | None = None) -> Outcome:
         idx = session["step"]
