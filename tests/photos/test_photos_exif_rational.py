@@ -32,3 +32,18 @@ def test_iphone_mpo_output_has_round_focal_length(tmp_path):
     focal = Image.open(out).getexif().get_ifd(exif.EXIF_IFD)[0x920A]
     assert focal.denominator <= exif.RATIONAL_MAX_DENOMINATOR
     assert (focal.numerator, focal.denominator) == (57, 10)
+
+
+def test_each_render_gets_new_bytes_same_picture(tmp_path):
+    """willhaben отклонял файл, байт в байт совпавший с уже загруженным: пересборка — новые байты."""
+    from tests.fakes.images import make_jpeg
+    src = make_jpeg(tmp_path / "IMG_1.jpg")
+    variant = load_variants()["listing"]
+    a, b = tmp_path / "a.jpg", tmp_path / "b.jpg"
+    to_jpeg(src, variant, a)
+    to_jpeg(src, variant, b)
+    assert a.read_bytes() != b.read_bytes()
+    ida = Image.open(a).getexif().get_ifd(exif.EXIF_IFD)[exif.IMAGE_UNIQUE_ID]
+    idb = Image.open(b).getexif().get_ifd(exif.EXIF_IFD)[exif.IMAGE_UNIQUE_ID]
+    assert ida != idb and len(ida) == 32 and int(ida, 16) >= 0
+    assert Image.open(a).tobytes() == Image.open(b).tobytes()

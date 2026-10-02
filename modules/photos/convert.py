@@ -346,7 +346,7 @@ def to_jpeg(src: Path, variant: Variant, dst: Path) -> ImageMeta:
     part = dst.with_name(dst.name + ".part")
     reduced = over = False
     try:
-        exif = exif_mod.clean(ex).tobytes()
+        exif = exif_mod.clean(ex, exif_mod.new_unique_id()).tobytes()  # каждый рендер — новые байты
         img.save(part, "JPEG", quality=variant.quality, subsampling=variant.subsampling,
                  icc_profile=_SRGB_BYTES, exif=exif, optimize=True)
         if variant.max_bytes and part.stat().st_size > variant.max_bytes:

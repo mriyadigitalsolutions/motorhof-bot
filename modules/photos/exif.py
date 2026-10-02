@@ -1,6 +1,7 @@
 """EXIF выходного JPEG: белый список тегов, без GPS и MakerNote, Orientation=1."""
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
 from PIL import Image
@@ -12,6 +13,7 @@ GPS_IFD = 0x8825
 MAKE, MODEL, ORIENTATION = 0x010F, 0x0110, 0x0112
 DATETIME = 0x0132  # IFD0 DateTime — запасная дата, если нет DateTimeOriginal
 DATETIME_ORIGINAL, OFFSET_TIME_ORIGINAL = 0x9003, 0x9011
+IMAGE_UNIQUE_ID = 0xA420
 
 # Теги основного IFD0, которые переносим
 IFD0_KEEP = (MAKE, MODEL)
@@ -43,8 +45,13 @@ def _tidy(value):
     return value
 
 
-def clean(src: Image.Exif | None) -> Image.Exif:
-    """Новый EXIF только из белого списка; ориентация всегда 1 (поворот уже применён к пикселям)."""
+def clean(src: Image.Exif | None, unique_id: str | None = None) -> Image.Exif:
+    """Новый EXIF только из белого списка; ориентация всегда 1 (поворот уже применён к пикселям).
+
+    unique_id — ImageUniqueID (0xA420, 32 hex): у каждого рендера свой, поэтому пересборка того же
+    снимка даёт новые байты. willhaben отклонял файл, байт в байт совпавший с уже загруженным
+    (MH_1008, MH_1016, 2026-10-02), а любую пересохранённую копию принимал.
+    """
     out = Image.Exif()
     if src is not None:
         for tag in IFD0_KEEP:
@@ -56,7 +63,13 @@ def clean(src: Image.Exif | None) -> Image.Exif:
         kept = {tag: _tidy(sub_src[tag]) for tag in EXIF_KEEP if tag in sub_src}
         if kept:
             out.get_ifd(EXIF_IFD).update(kept)
+    if unique_id:
+        out.get_ifd(EXIF_IFD)[IMAGE_UNIQUE_ID] = unique_id
     return out
+
+
+def new_unique_id() -> str:
+    return uuid.uuid4().hex
 
 
 def taken(src: Image.Exif | None) -> datetime | None:
