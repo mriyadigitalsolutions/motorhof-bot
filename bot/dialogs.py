@@ -65,10 +65,13 @@ class Dialogs:
         self.menu = menu
 
     async def start(self, dialog: Dialog, message: Message, state: FSMContext, user,
-                    return_screen: str = menu_mod.ROOT) -> None:
-        """Начать диалог; return_screen — экран меню, чья клавиатура вернётся после него."""
+                    return_screen: str = menu_mod.ROOT, *, values: dict | None = None,
+                    step: int = 0) -> None:
+        """Начать диалог; return_screen — экран меню, чья клавиатура вернётся после него.
+        values и step — как в Engine.start: команда с уже проверенным аргументом открывает
+        диалог сразу на нужном шаге (например, на экране подтверждения)."""
         await state.update_data({RETURN_KEY: return_screen})
-        out = self.engine.start(dialog, self.clock())
+        out = self.engine.start(dialog, self.clock(), values, step=step)
         await self._apply(out, message, state, user)
 
     async def cancel(self, message: Message, state: FSMContext) -> None:

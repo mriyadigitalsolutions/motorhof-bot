@@ -28,19 +28,19 @@ from core.dialog import Choice, Context, Dialog, Invalid, Step
 from core.drive import STOCK_TOPS, Drive, DriveError, VehicleMkdirError
 from core.log import redact
 from core.numbering import PREFIXES, ManualNumberSource, NumberSource
-from core.queue import Job, JobFailedQuietly, JobQueue, QueueFull
+from core.queue import Job, JobFailedQuietly, JobQueue
 
-from . import naming
+from . import jobs, naming
 
 log = logging.getLogger(__name__)
 
-MODULE = "drive"
+MODULE = jobs.MODULE
 KIND = "drive.mkdir"
 DIALOG_ID = "drive_mkdir"
 RUN_LABEL = "✅ Создать"
-EVENT_MODULE = "vehicle"
+EVENT_MODULE = jobs.EVENT_MODULE
 EVENT_ACTION = "folder_created"
-EVENT_OBJECT = "car"
+EVENT_OBJECT = jobs.EVENT_OBJECT
 
 ASK_TYPE = "Тип машины: MH — собственная, KO — комиссионная"
 ASK_BRAND = "Марка латиницей: например Mazda или Land Rover (2–30 символов)"
@@ -124,27 +124,14 @@ class FolderCreator:
     # --- постановка ----------------------------------------------------------
     def submit(self, values: dict, ctx: Context) -> str:
         """После «Создать»: задача в очередь; ответ — как у /fotos."""
-        code = values["code"]
-        payload = {"key": code, "prefix": values["prefix"], "name": self.name(values),
+        payload = {"key": values["code"], "prefix": values["prefix"], "name": self.name(values),
                    "brand": values["brand"], "model": values["model"],
                    "year": int(values.get("year") or self.year())}
-        try:
-            result = self.queue.enqueue(MODULE, KIND, payload, ctx.chat_id, ctx.user_id,
-                                        ctx.user_name)
-        except QueueFull as e:
-            return f"Очередь переполнена ({e.limit}), попробуй позже"
-        if result.duplicate_of is not None:
-            if result.position == 0:
-                return f"{code} уже обрабатывается"
-            return f"{code} уже в очереди, позиция {result.position}"
-        return f"{code}: в очереди, позиция {result.position}"
+        return jobs.enqueue(self.queue, KIND, payload, ctx)
 
     # --- задача --------------------------------------------------------------
     def _event(self, job: Job, path: str, status: str, error: str | None = None, **extra) -> int:
-        payload = {"user_name": job.user_name, "path": path, **extra}
-        return self.db.log_event(EVENT_MODULE, EVENT_ACTION, actor_id=job.telegram_id,
-                                 object_type=EVENT_OBJECT, object_id=job.key, payload=payload,
-                                 status=status, error=error)
+        return jobs.log_event(self.db, EVENT_ACTION, job, status, error, path=path, **extra)
 
     def _redact(self, text: str) -> str:
         return redact(text, self.secrets)
@@ -196,8 +183,6 @@ class FolderCreator:
     def interrupted(self, job: Job) -> str:
         """Задачу прервал перезапуск: открытое событие → interrupted, партнёру — проверить Drive."""
         code = job.key or ""
-        for ev in self.db.last_events(50, module=EVENT_MODULE):
-            if ev["object_id"] == code and ev["status"] == "running":
-                self.db.finish_event(ev["id"], "interrupted")
+        jobs.close_running(self.db, code, EVENT_ACTION)
         return (f"{code}: создание папки прервано перезапуском сервера. Проверь Drive и повтори "
                 "/neu: если папка уже есть, бот скажет, где она.")

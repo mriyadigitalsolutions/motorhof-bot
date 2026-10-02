@@ -2,7 +2,7 @@
 
 Понимает то подмножество rclone, которым пользуется Drive-слой: `lsjson` (`--dirs-only`,
 `--files-only`, `--max-depth`, `--hash`, `--stat`), `copyto`, `copy` (`--files-from-raw`,
-`--transfers`), `moveto`, `mkdir`, `deletefile`. `copy` — как rclone 1.71.1: имени из списка нет
+`--transfers`), `moveto` (файл или папка целиком), `mkdir`, `deletefile`, `size --json`. `copy` — как rclone 1.71.1: имени из списка нет
 в источнике — молча пропускается (код 0), папка назначения создаётся, нет папки-источника — код 3.
 Отдаёт `ID` и `Hashes.sha256` как Google Drive; `lsjson --stat` по папке —
 ошибка (на общем диске Drive он медленный и без `ID`): папки ищутся листингом родителя. Путь `<remote>:<путь>` ведёт в `base/<путь>`,
@@ -259,12 +259,32 @@ class FakeRclone:
         return RunResult(0, "", NOTICE + "\n")
 
     def _cmd_moveto(self, paths: list[str], flags: list[str]) -> RunResult:
+        """Файл или папка целиком; папка на существующую — слияние, как у rclone."""
         src, dst = self._local(paths[0]), self._local(paths[1])
+        if src.is_dir():
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            if dst.exists():
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+                shutil.rmtree(src)
+            else:
+                src.replace(dst)
+            return RunResult(0, "", NOTICE + "\n")
         if not src.is_file():
             return RunResult(3, "", NOTICE + "\nERROR : file not found\n")
         dst.parent.mkdir(parents=True, exist_ok=True)
         src.replace(dst)
         return RunResult(0, "", NOTICE + "\n")
+
+    def _cmd_size(self, paths: list[str], flags: list[str]) -> RunResult:
+        """`size --json`: число файлов и байт рекурсивно (папки не считаются), как rclone."""
+        target = self._local(paths[0])
+        if "--json" not in flags:
+            return RunResult(1, "", NOTICE + "\nERROR : fake: size только с --json\n")
+        if not target.exists():
+            return RunResult(3, "", NOTICE + "\nERROR : error listing: directory not found\n")
+        files = [target] if target.is_file() else [p for p in target.rglob("*") if p.is_file()]
+        out = {"count": len(files), "bytes": sum(p.stat().st_size for p in files), "sizeless": 0}
+        return RunResult(0, json.dumps(out), NOTICE + "\n")
 
     def _cmd_mkdir(self, paths: list[str], flags: list[str]) -> RunResult:
         self._local(paths[0]).mkdir(parents=True, exist_ok=True)

@@ -27,6 +27,8 @@ RUN_LABEL = "✅ Выполнить"
 CANCELLED = "Отменено"
 EXPIRED = "Диалог закрыт: 10 минут без ответа. Начни заново из /menu."
 STALE = "Этот диалог уже закрыт"
+CONFIRM_EXPIRED = "Время подтверждения вышло ({ttl}), начни заново"
+CONFIRM_DEADLINE = "confirm_deadline"  # ключ сессии: до какого момента действует подтверждение
 CONFIRM_TITLE = "Что будет сделано:"
 
 Values = dict[str, Any]
@@ -62,6 +64,27 @@ def layout(buttons: Sequence[str], nav: Sequence[str] = ()) -> list[list[str]]:
     if nav:
         rows.append(nav)
     return rows
+
+
+def plural(n: int, one: str, few: str, many: str) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return one
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return few
+    return many
+
+
+def duration_text(ttl: timedelta) -> str:
+    """«2 минуты», «90 секунд» — для текста о сроке подтверждения."""
+    seconds = int(ttl.total_seconds())
+    if seconds % 60 == 0:
+        n = seconds // 60
+        return f"{n} {plural(n, 'минута', 'минуты', 'минут')}"
+    return f"{seconds} {plural(seconds, 'секунда', 'секунды', 'секунд')}"
+
+
+def confirm_expired_text(ttl: timedelta) -> str:
+    return CONFIRM_EXPIRED.format(ttl=duration_text(ttl))
 
 
 class Invalid(Exception):
@@ -114,12 +137,16 @@ class Dialog:
     confirm(values) — текст экрана «Что будет сделано»; None — без подтверждения.
     finish(values, ctx) — действие после «Выполнить»; возвращает ответ партнёру.
     run_label — подпись кнопки подтверждения («✅ Создать»); по ней же распознаётся нажатие
-    и строится подсказка «Нажми …». По умолчанию RUN_LABEL («✅ Выполнить»)."""
+    и строится подсказка «Нажми …». По умолчанию RUN_LABEL («✅ Выполнить»).
+    confirm_ttl — сколько действует экран подтверждения с момента показа (None — пока жив
+    весь диалог, 10 минут). Ответ на экране подтверждения позже срока (кроме «Назад» и
+    «Отмена») закрывает диалог текстом «Время подтверждения вышло (…), начни заново»."""
     id: str
     steps: Sequence[Step]
     finish: Finish
     confirm: Callable[[Values], str] | None = None
     run_label: str = RUN_LABEL
+    confirm_ttl: timedelta | None = None
 
     def __post_init__(self) -> None:
         if not self.steps:
@@ -127,6 +154,9 @@ class Dialog:
         if normalize_label(self.run_label) in (normalize_label(BACK_LABEL),
                                                normalize_label(CANCEL_LABEL), ""):
             raise ValueError(f"диалог {self.id}: подпись подтверждения {self.run_label!r} занята")
+        if self.confirm_ttl is not None and (self.confirm is None
+                                             or self.confirm_ttl <= timedelta(0)):
+            raise ValueError(f"диалог {self.id}: confirm_ttl без экрана подтверждения или ≤ 0")
         names = [s.name for s in self.steps]
         if len(set(names)) != len(names):
             raise ValueError(f"диалог {self.id}: имена шагов повторяются")
@@ -172,11 +202,16 @@ class Engine:
         return self._dialogs.get(dialog_id)
 
     # --- сессия -------------------------------------------------------------
-    def start(self, dialog: Dialog | str, now: datetime, values: Values | None = None) -> Outcome:
+    def start(self, dialog: Dialog | str, now: datetime, values: Values | None = None,
+              *, step: int = 0) -> Outcome:
+        """Начать диалог. values — уже известные значения шагов; step — с какого шага
+        (len(steps) — сразу экран подтверждения: команда с аргументом, values заполнены)."""
         d = self._dialogs[dialog] if isinstance(dialog, str) else self.add(dialog)
-        session = {"dialog": d.id, "step": 0, "values": dict(values or {}),
+        if not 0 <= step <= len(d.steps) or (step == len(d.steps) and d.confirm is None):
+            raise ValueError(f"диалог {d.id}: нельзя начать с шага {step}")
+        session = {"dialog": d.id, "step": step, "values": dict(values or {}),
                    "deadline": (now + self.timeout).isoformat()}
-        return self._show(d, session)
+        return self._show(d, session, now=now)
 
     def expired(self, session: dict | None, now: datetime) -> bool:
         if not session:
@@ -202,6 +237,8 @@ class Engine:
                 return Outcome("closed", CANCELLED)
             return self._show(d, self._touch(dict(session, step=idx - 1), now))
         if idx >= len(d.steps):  # экран подтверждения ждёт «Выполнить»
+            if self._confirm_expired(d, session, now):
+                return Outcome("closed", confirm_expired_text(d.confirm_ttl))
             if label == normalize_label(d.run_label):
                 return Outcome("finish", values=dict(session["values"]), dialog=d.id)
             return self._show(d, session, note=f"Нажми «{normalize_label(d.run_label)}» "
@@ -230,6 +267,17 @@ class Engine:
             return None, Outcome("closed", STALE)
         return d, None
 
+    @staticmethod
+    def _confirm_expired(d: Dialog, session: dict, now: datetime) -> bool:
+        """Срок экрана подтверждения (Dialog.confirm_ttl) истёк; без срока — никогда.
+        Нет или битая отметка срока — истёк (безопасная сторона)."""
+        if d.confirm_ttl is None:
+            return False
+        try:
+            return now >= datetime.fromisoformat(session[CONFIRM_DEADLINE])
+        except (KeyError, TypeError, ValueError):
+            return True
+
     def _touch(self, session: dict, now: datetime) -> dict:
         return dict(session, deadline=(now + self.timeout).isoformat())
 
@@ -237,13 +285,18 @@ class Engine:
         values = dict(session["values"], **{name: value})
         session = self._touch(dict(session, values=values, step=session["step"] + 1), now)
         if session["step"] < len(d.steps) or d.confirm is not None:
-            return self._show(d, session)
+            return self._show(d, session, now=now)
         return Outcome("finish", values=values, dialog=d.id)
 
-    def _show(self, d: Dialog, session: dict, note: str | None = None) -> Outcome:
+    def _show(self, d: Dialog, session: dict, note: str | None = None,
+              now: datetime | None = None) -> Outcome:
+        """now задан — экран показан впервые (не повтор с подсказкой): у экрана подтверждения
+        с confirm_ttl отсчёт срока начинается отсюда."""
         idx = session["step"]
         values = session["values"]
         nav = [BACK_LABEL, CANCEL_LABEL]
+        if idx >= len(d.steps) and d.confirm_ttl is not None and now is not None:
+            session = dict(session, **{CONFIRM_DEADLINE: (now + d.confirm_ttl).isoformat()})
         if idx >= len(d.steps):
             text = CONFIRM_TITLE + "\n" + d.confirm(values)
             rows = layout([d.run_label], nav)

@@ -9,8 +9,11 @@
 прямо в этой папке в другое имя в ней же, удалять — только DNG прямо в `<машина>/<SOURCE_SUBDIR>/`.
 Создавать новую машину — только `mkdir_vehicle`: `<PREFIX>_AUTO_НАЛИЧИЕ/<год>/`,
 `<PREFIX>_AUTO_НАЛИЧИЕ/<год>/<PREFIX>_<цифры>_<Марка>_<Модель>/` и её подпапки
-`SOURCE_SUBDIR`, `SUBDIR_DOCS`, `SUBDIR_SALES` (пустыми). Остальное — `PermissionError` до вызова
-rclone. Почему так — docs/adr/0009-drive-write-boundaries.md.
+`SOURCE_SUBDIR`, `SUBDIR_DOCS`, `SUBDIR_SALES` (пустыми). Переносить папку машины целиком —
+только `move_vehicle`: `<P>_AUTO_НАЛИЧИЕ/<год>/<имя>` ↔ `<P>_AUTO_ПРОДАНО/<тот же год>/<то же имя>`
+(папка года в цели создаётся при отсутствии). Считать файлы — только `size` (числа, без имён)
+по папке машины или её `SOURCE_SUBDIR`. Остальное — `PermissionError` до вызова rclone.
+Почему так — docs/adr/0009-drive-write-boundaries.md.
 """
 from __future__ import annotations
 
@@ -39,6 +42,13 @@ TOPS: dict[str, str] = {
 
 # Куда mkdir_vehicle кладёт новую машину: только НАЛИЧИЕ своего префикса.
 STOCK_TOPS: dict[str, str] = {"MH": "MH_AUTO_НАЛИЧИЕ", "KO": "KO_AUTO_НАЛИЧИЕ"}
+# Куда move_vehicle переносит проданную машину: ПРОДАНО своего префикса.
+SOLD_TOPS: dict[str, str] = {"MH": "MH_AUTO_ПРОДАНО", "KO": "KO_AUTO_ПРОДАНО"}
+# Корень → (префикс, kind): MH_AUTO_ПРОДАНО → ("MH", "sold").
+_TOP_INFO: dict[str, tuple[str, str]] = {
+    **{top: (p, "stock") for p, top in STOCK_TOPS.items()},
+    **{top: (p, "sold") for p, top in SOLD_TOPS.items()},
+}
 
 _CAR_NAME = re.compile(r"^((?:MH|KO)_\d+)_")
 _CODE = re.compile(r"^(?:MH|KO)_\d+$")
@@ -129,6 +139,20 @@ class CarFolder:
     year: str
     id: str | None = None
     ambiguous: tuple[str, ...] = ()  # только в locate_all: все пути, если их 2+
+
+
+@dataclass(frozen=True)
+class FolderSize:
+    """Итог `rclone size --json`: только числа, имён файлов бот не видит."""
+    count: int
+    bytes: int
+
+
+class VehicleMove(NamedTuple):
+    """Итог move_vehicle: откуда, куда (пути от корня) и создана ли папка года в цели."""
+    src: str
+    dst: str
+    year_created: bool
 
 
 @dataclass(frozen=True)
@@ -304,10 +328,14 @@ class Drive:
                 found.append(f"{top}/{year}/{name}")
         return found
 
-    def find_car(self, code: str) -> CarFolder:
+    def find_cars(self, code: str) -> list[CarFolder]:
+        """Все папки машины с кодом code во всех четырёх корнях (обычно 0 или 1)."""
         if not _CODE.match(code):
             raise ValueError(f"код машины должен быть вида MH_1022 или KO_2001: {code!r}")
-        found = [c for c in self._scan() if c.code == code]
+        return [c for c in self._scan() if c.code == code]
+
+    def find_car(self, code: str) -> CarFolder:
+        found = self.find_cars(code)
         if not found:
             raise CarNotFound(code)
         if len(found) > 1:
@@ -401,6 +429,25 @@ class Drive:
         if not folder_id:
             return None
         return f"https://drive.google.com/drive/folders/{folder_id}"
+
+    def size(self, path: str) -> FolderSize | None:
+        """Число файлов и объём папки машины или её `SOURCE_SUBDIR` (рекурсивно, `rclone size
+        --json`): rclone отдаёт только числа, имена файлов (в том числе в Документы и Verkauf)
+        бот не видит. Нет папки → None. Другой путь → PermissionError до вызова rclone."""
+        parts = _split(path)
+        ok = (len(parts) in (3, 4) and self._vehicle_parts(parts[:3]) is not None
+              and (len(parts) == 3 or parts[3] == self.source_subdir))
+        if not ok:
+            raise PermissionError(f"считать можно только папку машины или её «{self.source_subdir}»: {path}")
+        res = self._run("size", self.spec(path), "--json")
+        if res.returncode != 0 and self._missing(res):
+            return None
+        self._check(res, "подсчёт файлов")
+        data = self._json(res, "{}")
+        try:
+            return FolderSize(int(data["count"]), int(data["bytes"]))
+        except (KeyError, TypeError, ValueError):
+            raise DriveError("rclone вернул непонятный ответ (не JSON). Повтори позже.") from None
 
     def pull(self, path: str, local: Path) -> Path:
         local = Path(local)
@@ -571,6 +618,70 @@ class Drive:
     def _mkdir_vehicle_dir(self, path: str) -> None:
         self._check_vehicle(path)
         self._check(self._run("mkdir", self.spec(path)), "создание папки")
+
+    # --- перенос папки машины целиком (НАЛИЧИЕ ↔ ПРОДАНО) ---
+
+    @staticmethod
+    def _vehicle_parts(parts: list[str]) -> tuple[str, str] | None:
+        """[корень, год, имя] папки машины → (префикс, kind); иначе None. Имя — любое
+        `<P>_<цифры>_…` того же префикса, что корень (старые папки бывают не по шаблону
+        mkdir_vehicle), без переводов строк."""
+        if len(parts) != 3 or parts[0] not in _TOP_INFO or not _YEAR.fullmatch(parts[1]):
+            return None
+        prefix, kind = _TOP_INFO[parts[0]]
+        m = _CAR_NAME.match(parts[2])
+        if not m or not m.group(1).startswith(prefix + "_") or any(c in parts[2] for c in "\n\r"):
+            return None
+        return prefix, kind
+
+    def _check_move(self, src: str, dst: str) -> None:
+        """Перенос: src — папка машины `<P>_AUTO_<НАЛИЧИЕ|ПРОДАНО>/<год>/<имя>`, dst — та же
+        папка в противоположном корне того же префикса: год и имя не меняются."""
+        a, b = _split(src), _split(dst)
+        info_a, info_b = self._vehicle_parts(a), self._vehicle_parts(b)
+        ok = (info_a is not None and info_b is not None and info_a[0] == info_b[0]
+              and info_a[1] != info_b[1] and a[1:] == b[1:])
+        if not ok:
+            raise PermissionError(
+                "переносить можно только папку машины <P>_AUTO_НАЛИЧИЕ/<год>/<имя> ↔ "
+                f"<P>_AUTO_ПРОДАНО/<тот же год>/<то же имя>: {src} -> {dst}")
+
+    def vehicle_target(self, src: str, dst: str) -> str:
+        """Полный путь цели переноса. dst — корень (`MH_AUTO_ПРОДАНО`): год и имя берутся из
+        src; или полный путь `<корень>/<год>/<имя>`. Вне границ → PermissionError."""
+        parts = _split(src)
+        target = _split(dst)
+        if len(target) == 1 and len(parts) == 3:
+            target = [target[0], *parts[1:]]
+        full = "/".join(target)
+        self._check_move(src, full)
+        return full
+
+    def move_vehicle(self, src: str, dst: str) -> VehicleMove:
+        """Перенести папку машины целиком (`rclone moveto --create-empty-src-dirs`: со всеми подпапками, и пустыми, без чтения
+        содержимого): НАЛИЧИЕ → ПРОДАНО того же префикса или обратно, тот же год, то же имя.
+        dst — корень цели (`MH_AUTO_ПРОДАНО`) или полный путь (см. vehicle_target).
+
+        Проверки до первого вызова rclone: границы (иначе PermissionError). Затем: нет корня
+        цели → DriveError (корни бот не создаёт); в цели уже есть папка с этим именем →
+        FileExistsError, rclone moveto не зовётся; нет папки года в цели — создаётся. Сбой rclone
+        → DriveError. Что папки в источнике больше нет и файлов столько же — проверяет вызывающий
+        (`find_dir`, `size`): moveto ничего не удаляет сверх переноса."""
+        target = self.vehicle_target(src, dst)
+        parts = _split(target)
+        top, year_path = parts[0], "/".join(parts[:2])
+        if self.find_dir(top) is None:
+            raise DriveError(f"на Drive нет папки {top}: проверь DRIVE_ROOT и доступ rclone.")
+        year_created = False
+        if self.find_dir(year_path) is None:
+            self._check(self._run("mkdir", self.spec(year_path)), "создание папки года")
+            year_created = True
+        elif self.find_dir(target) is not None:
+            raise FileExistsError(f"в цели уже есть папка: {target}")
+        self._check_move(src, target)
+        self._check(self._run("moveto", self.spec(src), self.spec(target),
+                                   "--create-empty-src-dirs"), "перенос папки")
+        return VehicleMove("/".join(_split(src)), target, year_created)
 
     def rename(self, src: str, dst: str) -> None:
         """Переименование файла внутри «На выгрузку» (rclone moveto); цель перезаписывается."""
