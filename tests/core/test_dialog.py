@@ -191,3 +191,19 @@ def test_free_text_reaches_validate_without_spaces_only(engine):
                finish=lambda v, c: "")
     engine.text(engine.start(d, T0).session, "  +43 660 ", T0)
     assert seen == ["+43 660"]
+
+
+def test_fixed_start_back_on_first_shown_step_closes():
+    """Engine.start(fixed=True): шаги до стартового закрыты — «Назад» на нём закрывает диалог."""
+    from core.dialog import Engine, Dialog, Step
+    d = Dialog(id="fx", steps=[Step("code", "номер?", validate=lambda t, v: t),
+                               Step("v", "вариант?", choices=[Choice("A", 1)])],
+               finish=lambda v, c: "ok", confirm=lambda v: "итог")
+    eng, now = Engine(), datetime(2026, 10, 2, tzinfo=timezone.utc)
+    out = eng.start(d, now, {"code": "MH_1"}, step=1, fixed=True)
+    assert eng.text(out.session, BACK_LABEL, now).text == CANCELLED
+    out = eng.text(out.session, "A", now)  # подтверждение → «Назад» → варианты
+    out = eng.text(out.session, BACK_LABEL, now)
+    assert (out.kind, out.text) == ("ask", "вариант?")
+    plain = eng.start(d, now, {"code": "MH_1"}, step=1)  # без fixed — как раньше
+    assert eng.text(plain.session, BACK_LABEL, now).text == "номер?"

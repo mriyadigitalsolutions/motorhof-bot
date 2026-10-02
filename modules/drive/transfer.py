@@ -138,6 +138,11 @@ class Mover:
                 "path": car.path, "count": total.count, "bytes": total.bytes,
                 "photos": None if photos is None else photos.count}
 
+    def car_entry(self, code: str) -> tuple[dict, int]:
+        """Кнопка в карточке машины (и /verkauft с номером): номер проверяется сразу, диалог
+        начинается с экрана проверки. Invalid — ответ партнёру, диалог не открывается."""
+        return {"car": self.check_car(code, {})}, len(self.dialog.steps)
+
     def confirm_text(self, values: dict) -> str:
         car = values["car"]
         photos = car.get("photos")

@@ -1,10 +1,12 @@
 """Модуль drive: экран «Google Drive» в главном меню, «Создать папку машины» (/neu),
-«В продано» (/verkauft) и «Вернуть в наличие» (/zurueck).
+«В продано» (/verkauft), «Вернуть в наличие» (/zurueck), «Машины в наличии» (/lager).
 
 Подкоманды Drive публикуют в этот экран свои кнопки через parent="drive": «Форматировать
 фото» — модуль photos; «📂 Создать папку» — этот модуль (vehicle.py, задача "drive.mkdir");
 «🏁 В продано» и «↩️ Вернуть в наличие» — этот модуль (transfer.py, задачи "drive.sell" и
-"drive.unsell"). «Добавить фотографии», «Машины в наличии» появятся здесь позже.
+"drive.unsell"); «🚗 Машины в наличии» — список и карточка машины (stock.py, меню рисует
+bot/menu.py). В карточку машины кнопки публикуются через parent="car" (CAR): «📸
+Форматировать фото» — photos; «🏁 В продано» и «📥 Добавить фотографии» — этот модуль.
 Порядок и активность — modules.MENU. Общее для задач модуля — jobs.py.
 """
 from __future__ import annotations
@@ -19,6 +21,7 @@ from core.dialog import Invalid
 from core.drive import Drive
 from core.settings import Settings, load_settings
 
+from .stock import Stock
 from .transfer import RETURN, SELL, Mover
 from .vehicle import FolderCreator
 
@@ -38,9 +41,20 @@ RETURN_COMMAND = "zurueck"
 RETURN_ACTION = "unsell"
 RETURN_TITLE = "Вернуть в наличие"
 RETURN_ICON = "↩️"
+STOCK_COMMAND = "lager"
+STOCK_ACTION = "lager"
+STOCK_TITLE = "Машины в наличии"
+STOCK_ICON = "🚗"
+CAR = "car"  # карточка машины в меню (bot/menu.py CAR): кнопки для выбранной машины
+CAR_SELL_ACTION = "car_sell"
+UPLOAD_ACTION = "car_upload"
+UPLOAD_TITLE = "Добавить фотографии"
+UPLOAD_ICON = "📥"
+UPLOAD_PENDING = "В разработке"
 HELP = ("/neu — создать папку новой машины на Drive (то же, что «Создать папку» в меню)\n"
         "/verkauft MH_1022 — перенести папку машины в ПРОДАНО (без номера — спросит)\n"
-        "/zurueck MH_1022 — вернуть папку машины из ПРОДАНО в НАЛИЧИЕ (без номера — спросит)")
+        "/zurueck MH_1022 — вернуть папку машины из ПРОДАНО в НАЛИЧИЕ (без номера — спросит)\n"
+        "/lager — машины в наличии: список и карточка машины")
 NO_DIALOGS = "Диалоги недоступны: открой /menu"
 
 
@@ -74,15 +88,20 @@ def make_move_command(mover: Mover):
                                 return_screen=SCREEN)
             return
         try:
-            car = await asyncio.to_thread(mover.check_car, arg, {})
+            values, step = await asyncio.to_thread(mover.car_entry, arg)
         except Invalid as e:
             await message.answer(e.text)
             return
         await dialogs.start(mover.dialog, message, state, message.from_user,
-                            return_screen=SCREEN, values={"car": car},
-                            step=len(mover.dialog.steps))
+                            return_screen=SCREEN, values=values, step=step)
 
     return on_move
+
+
+def upload_pending(ctx) -> str:
+    """«📥 Добавить фотографии» в карточке машины (ctx.car — код) — точка подключения фазы D,
+    часть 2: заменить handler на dialog=<диалог загрузки>, car_entry=<код → (values, шаг)>."""
+    return UPLOAD_PENDING
 
 
 def register(router, queue, *, menu=None, settings: Settings | None = None,
@@ -110,4 +129,11 @@ def register(router, queue, *, menu=None, settings: Settings | None = None,
                     dialog=movers[SELL.kind].dialog)
         menu.action(RETURN_ACTION, RETURN_TITLE, parent=SCREEN, order=40, icon=RETURN_ICON,
                     dialog=movers[RETURN.kind].dialog)
+        menu.car_list(STOCK_ACTION, STOCK_TITLE, parent=SCREEN, order=50, icon=STOCK_ICON,
+                      source=Stock(drive, secrets=settings.secrets()), command=STOCK_COMMAND)
+        # карточка машины: «📸 Форматировать фото» (order 10) публикует photos
+        menu.action(UPLOAD_ACTION, UPLOAD_TITLE, parent=CAR, order=20, icon=UPLOAD_ICON,
+                    handler=upload_pending)
+        menu.action(CAR_SELL_ACTION, SELL_TITLE, parent=CAR, order=30, icon=SELL_ICON,
+                    dialog=movers[SELL.kind].dialog, car_entry=movers[SELL.kind].car_entry)
     return creator

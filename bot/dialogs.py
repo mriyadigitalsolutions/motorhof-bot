@@ -66,12 +66,13 @@ class Dialogs:
 
     async def start(self, dialog: Dialog, message: Message, state: FSMContext, user,
                     return_screen: str = menu_mod.ROOT, *, values: dict | None = None,
-                    step: int = 0) -> None:
+                    step: int = 0, fixed: bool = False) -> None:
         """Начать диалог; return_screen — экран меню, чья клавиатура вернётся после него.
-        values и step — как в Engine.start: команда с уже проверенным аргументом открывает
-        диалог сразу на нужном шаге (например, на экране подтверждения)."""
+        values, step и fixed — как в Engine.start: команда с уже проверенным аргументом
+        открывает диалог сразу на нужном шаге (например, на экране подтверждения); fixed —
+        «Назад» на этом шаге закрывает диалог (кнопка карточки машины)."""
         await state.update_data({RETURN_KEY: return_screen})
-        out = self.engine.start(dialog, self.clock(), values, step=step)
+        out = self.engine.start(dialog, self.clock(), values, step=step, fixed=fixed)
         await self._apply(out, message, state, user)
 
     async def cancel(self, message: Message, state: FSMContext) -> None:
@@ -90,13 +91,17 @@ class Dialogs:
         # состояния движок не меняет.
         out = await asyncio.to_thread(self.engine.text, session, text, self.clock())
         await self._apply(out, message, state, message.from_user)
-        expired_label = (out.kind == "closed" and out.text == EXPIRED and self.menu is not None
-                         and self.menu.is_label(text))
-        if expired_label and normalize_label(text) != normalize_label(BACK_LABEL):
+        expired = out.kind == "closed" and out.text == EXPIRED and self.menu is not None
+        is_back = normalize_label(text) == normalize_label(BACK_LABEL)
+        expired_label = expired and (self.menu.is_label(text)
+                                     or self.menu.car_action(text) is not None)
+        if expired_label and not is_back:
             # диалог закрыт таймаутом, а партнёр нажал кнопку меню — обработать нажатие
-            # (handle_label его и удалит); «Назад» — нет: партнёр остаётся на экране,
-            # откуда начат диалог
-            await menu_mod.handle_label(message, state, self.menu, self)
+            # (обработчик его и удалит); «Назад» — нет: партнёр остаётся на экране, откуда
+            # начат диалог. Диалог из карточки машины вернул экран "car": кнопка карточки
+            # («📸 …», «🏁 …») — это кнопка карточки, а не одноимённая кнопка экрана drive
+            if not await menu_mod.handle_cars(message, state, self.menu, self):
+                await menu_mod.handle_label(message, state, self.menu, self)
         elif expired_label or _accepted(out):
             await menu_mod.delete_press(message)
 

@@ -30,6 +30,7 @@ STALE = "Этот диалог уже закрыт"
 CONFIRM_EXPIRED = "Время подтверждения вышло ({ttl}), начни заново"
 CONFIRM_DEADLINE = "confirm_deadline"  # ключ сессии: до какого момента действует подтверждение
 CONFIRM_TITLE = "Что будет сделано:"
+FIRST_STEP = "first_step"  # ключ сессии: шаги раньше закрыты (Engine.start(fixed=True))
 
 Values = dict[str, Any]
 
@@ -103,10 +104,12 @@ class Choice:
 
 @dataclass(frozen=True)
 class Context:
-    """Кто ведёт диалог и где: передаётся в finish."""
+    """Кто ведёт диалог и где: передаётся в finish и в обработчик кнопки меню. car — код
+    машины, если кнопка нажата в карточке машины (экран «car» меню), иначе пусто."""
     chat_id: int
     user_id: int
     user_name: str
+    car: str = ""
 
 
 @dataclass(frozen=True)
@@ -203,14 +206,18 @@ class Engine:
 
     # --- сессия -------------------------------------------------------------
     def start(self, dialog: Dialog | str, now: datetime, values: Values | None = None,
-              *, step: int = 0) -> Outcome:
+              *, step: int = 0, fixed: bool = False) -> Outcome:
         """Начать диалог. values — уже известные значения шагов; step — с какого шага
-        (len(steps) — сразу экран подтверждения: команда с аргументом, values заполнены)."""
+        (len(steps) — сразу экран подтверждения: команда с аргументом, values заполнены).
+        fixed — шаги до step закрыты: «Назад» на первом показанном шаге закрывает диалог
+        («Отменено»), а не открывает шаг раньше (карточка машины: машину сменить нельзя)."""
         d = self._dialogs[dialog] if isinstance(dialog, str) else self.add(dialog)
         if not 0 <= step <= len(d.steps) or (step == len(d.steps) and d.confirm is None):
             raise ValueError(f"диалог {d.id}: нельзя начать с шага {step}")
         session = {"dialog": d.id, "step": step, "values": dict(values or {}),
                    "deadline": (now + self.timeout).isoformat()}
+        if fixed:
+            session[FIRST_STEP] = step
         return self._show(d, session, now=now)
 
     def expired(self, session: dict | None, now: datetime) -> bool:
@@ -233,7 +240,7 @@ class Engine:
         if label == normalize_label(CANCEL_LABEL):
             return Outcome("closed", CANCELLED)
         if label == normalize_label(BACK_LABEL):
-            if idx == 0:
+            if idx <= int(session.get(FIRST_STEP) or 0):
                 return Outcome("closed", CANCELLED)
             return self._show(d, self._touch(dict(session, step=idx - 1), now))
         if idx >= len(d.steps):  # экран подтверждения ждёт «Выполнить»

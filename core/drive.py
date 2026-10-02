@@ -282,11 +282,14 @@ class Drive:
 
     # --- поиск машины ---
 
-    def _top_dirs(self):
-        """Папки глубины 2 во всех четырёх корнях: (top, kind, год, имя, ID). Нет ни одного
-        корня → DriveError. Внутрь папок машин не заглядывает."""
+    def _top_dirs(self, kinds: Iterable[str] = ("stock", "sold")):
+        """Папки глубины 2 в корнях вида kinds (по умолчанию все четыре): (top, kind, год, имя,
+        ID). Нет ни одного такого корня → DriveError. Внутрь папок машин не заглядывает."""
+        kinds = set(kinds)
         present = 0
         for top, kind in TOPS.items():
+            if kind not in kinds:
+                continue
             res = self._run("lsjson", self.spec(top), "--dirs-only", "--max-depth", "2")
             if res.returncode != 0 and self._missing(res):
                 continue  # нет такой корневой папки — ищем в остальных
@@ -302,10 +305,10 @@ class Drive:
                 "Не найдена ни одна из папок наличия/проданных в корне Drive. Проверь DRIVE_ROOT и доступ rclone."
             )
 
-    def _scan(self) -> list[CarFolder]:
-        """Все папки машин глубины 2 во всех четырёх корнях."""
+    def _scan(self, kinds: Iterable[str] = ("stock", "sold")) -> list[CarFolder]:
+        """Все папки машин глубины 2 в корнях вида kinds (по умолчанию во всех четырёх)."""
         cars: list[CarFolder] = []
-        for top, kind, year, name, folder_id in self._top_dirs():
+        for top, kind, year, name, folder_id in self._top_dirs(kinds):
             m = _CAR_NAME.match(name)
             if not m:
                 continue
@@ -341,6 +344,12 @@ class Drive:
         if len(found) > 1:
             raise CarAmbiguous(code, [c.path for c in found])
         return found[0]
+
+    def stock_cars(self) -> list[CarFolder]:
+        """Все папки машин в MH_AUTO_НАЛИЧИЕ и KO_AUTO_НАЛИЧИЕ (все годы), по листингу корня
+        глубины 2 — один `lsjson` на корень, внутрь машин (Документы, Verkauf) не заглядывает.
+        Порядок — как отдал rclone; сортирует вызывающий."""
+        return self._scan(("stock",))
 
     def locate_all(self) -> dict[str, CarFolder]:
         cars = self._scan()

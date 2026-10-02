@@ -187,3 +187,82 @@ def test_declaration_errors():
         menu.scope("other").section("drive", "Дубль")
     with pytest.raises(ValueError):
         menu.scope("menu")
+
+
+# --- карточка машины (parent="car") и список машин ------------------------------
+
+class Source:
+    def list_cars(self):
+        return []
+
+    def card(self, code):
+        return code
+
+    def code_of(self, text):
+        return None
+
+
+def car_tree():
+    menu = tree()
+    menu.scope("drive").car_list("stock", "Список", parent="drive", order=60, source=Source(),
+                                 icon="🚗", command="lager")
+    menu.scope("photos").action("car_convert", "Форматировать фото", parent="car", order=10,
+                                icon="📸", dialog=dialog(), car_entry=lambda code: ({"a": code}, 1))
+    menu.scope("drive").action("car_upload", "Добавить", parent="car", order=20,
+                               handler=lambda ctx: ctx.car)
+    menu.validate()
+    return menu
+
+
+def test_car_actions_have_own_keyboard_and_may_repeat_menu_labels():
+    menu = car_tree()
+    assert menu.car_rows() == [["📸 Форматировать фото", "Добавить"], ["⬅️ Назад"]]
+    # подпись карточки не ищется вне карточки: «Форматировать фото» — кнопка экрана drive
+    assert menu.press_label("Форматировать фото", "drive").node.parent == "drive"
+    assert menu.press_label("Добавить", "drive").kind == "none"
+    assert menu.car_action("Добавить").id == "car_upload"
+    assert menu.press_label("🚗 Список", "drive").kind == "cars"
+
+
+def test_car_list_pages():
+    menu = car_tree()
+    items = [[f"MH_{i}", f"MH_{i}"] for i in range(9)]
+    screen, page = menu.cars_screen(items, 5)
+    assert page == 1 and screen.text == "Машины в наличии: 9 (страница 2 из 2)"
+    assert screen.rows == [["MH_8"], ["◀️ Назад по списку"], ["⬅️ Назад"]]
+    assert menu.cars_screen([], 0)[0].text == "В наличии машин нет"
+
+
+def test_car_declaration_errors():
+    menu = tree()
+    with pytest.raises(ValueError, match="car_entry"):
+        menu.scope("photos").action("c1", "X", parent="car", dialog=dialog())
+    with pytest.raises(ValueError, match="car_entry"):
+        menu.scope("photos").action("c2", "X", parent="drive", dialog=dialog(),
+                                    car_entry=lambda c: ({}, 0))
+    with pytest.raises(ValueError, match="занято"):
+        menu.scope("demo").section("car", "Машина")
+    menu.scope("drive").car_list("stock", "Список", parent="drive", source=Source())
+    with pytest.raises(ValueError, match="уже объявлен"):
+        menu.scope("drive").car_list("stock2", "Список 2", parent="drive", source=Source())
+
+
+def test_card_without_car_list_stops_start():
+    menu = tree()
+    menu.scope("drive").action("car_upload", "Добавить", parent="car", handler=lambda c: "")
+    with pytest.raises(ValueError, match="без списка машин"):
+        menu.validate()
+
+
+def test_duplicate_card_label_stops_start():
+    menu = car_tree()
+    menu.scope("demo").action("car_x", "Добавить", parent="car", icon="➕", handler=lambda c: "")
+    with pytest.raises(ValueError, match="уже у"):
+        menu.validate()
+
+
+def test_pager_label_on_menu_button_stops_start():
+    menu = car_tree()
+    menu.scope("demo").action("next", "Дальше", parent="drive", handler=lambda c: "")
+    with pytest.raises(ValueError, match="занята"):
+        menu.validate()

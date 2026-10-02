@@ -1,4 +1,5 @@
-"""Кнопка «Форматировать фото» в экране Google Drive (parent="drive") и её диалог.
+"""Кнопка «Форматировать фото» в экране Google Drive (parent="drive") и в карточке машины
+(parent="car": номер уже выбран, диалог начинается с вариантов) и её диалог.
 
 Шаги: номер машины (текст, как в /fotos) → какие JPEG (кнопки по variants.yaml) →
 «Что будет сделано» → «Выполнить». После «Выполнить» — тот же handlers.submit, что у
@@ -16,6 +17,8 @@ from .convert import Variant, load_variants
 
 PARENT = "drive"
 ACTION = "convert"
+CAR = "car"  # карточка машины в меню (bot/menu.py CAR)
+CAR_ACTION = "car_convert"
 TITLE = "Форматировать фото"
 ICON = "📸"
 DIALOG_ID = "photos_convert"
@@ -63,7 +66,15 @@ def make_dialog(queue: JobQueue,
     ], finish=finish, confirm=confirm)
 
 
+def car_entry(code: str) -> tuple[dict, int]:
+    """Из карточки машины: номер уже выбран — диалог начинается с шага вариантов."""
+    return {"code": code}, 1
+
+
 def publish(menu, queue: JobQueue) -> None:
-    """Кнопка в чужом экране: экран drive объявляет модуль drive, photos его не импортирует."""
-    menu.action(ACTION, TITLE, parent=PARENT, order=10, icon=ICON,
-                dialog=make_dialog(queue))
+    """Кнопки в чужих экранах: экран drive объявляет модуль drive, карточку машины (CAR) —
+    меню; photos их не импортирует. Один диалог на обе кнопки."""
+    dialog = make_dialog(queue)
+    menu.action(ACTION, TITLE, parent=PARENT, order=10, icon=ICON, dialog=dialog)
+    menu.action(CAR_ACTION, TITLE, parent=CAR, order=10, icon=ICON, dialog=dialog,
+                car_entry=car_entry)
