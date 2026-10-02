@@ -122,7 +122,7 @@ async def test_back_from_list_goes_to_drive_screen(app):
     await open_list(anna)
     await anna.say("⬅️ Назад")
     assert screens(tg)[-1][0] == "Google Drive"
-    assert ["🚗 Машины в наличии"] in keyboards(tg)[-1]
+    assert ["↩️ Вернуть в наличие", "🚗 Машины в наличии"] in keyboards(tg)[-1]
 
 
 async def test_empty_stock(tmp_path, monkeypatch):
@@ -240,13 +240,15 @@ async def test_card_sell_opens_check_screen_of_this_car(app):
     assert app.queue.status().queued == []
 
 
-async def test_card_upload_is_pending(app):
+async def test_card_upload_opens_receive_mode_for_this_car(app):
     tg = ChatBot()
     anna = Partner(app, tg, ANNA)
     await anna.say("/lager")
     await anna.say(NAME)
     await anna.say("📥 Добавить фотографии")
-    assert last(tg) == ("В разработке", CARD)
+    text, rows = last(tg)
+    assert text.startswith("Жду фото для MH_1022\nПринято: 0")
+    assert rows == [["✅ Готово", "✖️ Отмена"]]
 
 
 async def test_card_labels_outside_card_keep_their_drive_meaning(app):

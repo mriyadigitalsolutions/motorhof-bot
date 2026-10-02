@@ -87,3 +87,16 @@ def test_hash_inside_value_is_kept_and_spaced_comment_is_cut():
     assert s.output_subdir == "На выгрузку"
     assert s.source_subdir == "Фото #1"
     assert s.drive_root == "root # x"
+
+
+def test_max_upload_mb_default_and_override():
+    assert load_settings(_parse_env_example()).max_upload_mb == 20
+    assert load_settings({}).max_upload_mb == 20
+    assert load_settings({"MAX_UPLOAD_MB": "15"}).max_upload_mb == 15
+    assert load_settings({"MAX_UPLOAD_MB": "много"}).max_upload_mb == 20
+
+
+def test_max_upload_mb_above_bot_api_limit_is_capped(caplog):
+    with caplog.at_level("WARNING"):
+        assert load_settings({"MAX_UPLOAD_MB": "50"}).max_upload_mb == 20
+    assert "MAX_UPLOAD_MB=50" in caplog.text

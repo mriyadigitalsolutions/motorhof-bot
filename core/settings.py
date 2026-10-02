@@ -28,6 +28,7 @@ class Settings:
     db_path: Path
     log_level: str
     queue_limit: int
+    max_upload_mb: int  # предел файла из Telegram (ТЗ 3.6); Bot API больше 20 МБ не отдаёт
     tz: str
     daily_check_time: str
     dng_reminder_days: int
@@ -77,6 +78,18 @@ def _ids(env: Mapping[str, str], name: str) -> frozenset[int]:
     return frozenset(int(p) for p in parts)
 
 
+UPLOAD_MB_MAX = 20  # больше обычный Bot API боту не отдаёт
+
+
+def _upload_mb(env: Mapping[str, str]) -> int:
+    value = _int(env, "MAX_UPLOAD_MB", UPLOAD_MB_MAX)
+    if value > UPLOAD_MB_MAX:
+        log.warning("MAX_UPLOAD_MB=%s: Bot API не скачивает файлы больше %s МБ, беру %s",
+                    value, UPLOAD_MB_MAX, UPLOAD_MB_MAX)
+        return UPLOAD_MB_MAX
+    return value
+
+
 def load_settings(env: Mapping[str, str] | None = None) -> Settings:
     env = os.environ if env is None else env
     check_time = _str(env, "DAILY_CHECK_TIME", "03:00")
@@ -97,6 +110,7 @@ def load_settings(env: Mapping[str, str] | None = None) -> Settings:
         db_path=Path(_str(env, "DB_PATH", "/app/data/motorhof.sqlite")),
         log_level=_str(env, "LOG_LEVEL", "INFO").upper(),
         queue_limit=_int(env, "QUEUE_LIMIT", 10),
+        max_upload_mb=_upload_mb(env),
         tz=_str(env, "TZ", "Europe/Vienna"),
         daily_check_time=check_time,
         dng_reminder_days=_int(env, "DNG_REMINDER_DAYS", 60),

@@ -5,7 +5,8 @@
 собирается здесь же: `<remote>:<root>/<путь>`; при `remote=""` или если `remote` — локальная
 папка, адрес — локальный путь (так тесты гоняют настоящий rclone на локальном бэкенде).
 
-Писать можно только в `<машина>/<SOURCE_SUBDIR>/<OUTPUT_SUBDIR>/`, переименовывать — только файл
+Писать можно только в `<машина>/<SOURCE_SUBDIR>/<OUTPUT_SUBDIR>/` (JPEG модуля photos) и новые
+файлы из Telegram прямо в `<машина>/<SOURCE_SUBDIR>/` (`upload_files`, без перезаписи), переименовывать — только файл
 прямо в этой папке в другое имя в ней же, удалять — только DNG прямо в `<машина>/<SOURCE_SUBDIR>/`.
 Создавать новую машину — только `mkdir_vehicle`: `<PREFIX>_AUTO_НАЛИЧИЕ/<год>/`,
 `<PREFIX>_AUTO_НАЛИЧИЕ/<год>/<PREFIX>_<цифры>_<Марка>_<Модель>/` и её подпапки
@@ -481,14 +482,15 @@ class Drive:
     def _batch_timeout(self, count: int, size: int) -> float:
         return max(self.timeout, count * BATCH_SECONDS_PER_FILE + size / BATCH_MIN_BYTES_PER_SEC)
 
-    def _copy_batch(self, src: str, dst: str, names: list[str], timeout: float) -> RunResult:
-        """Один `rclone copy src dst --files-from-raw <список> --transfers N`."""
+    def _copy_batch(self, src: str, dst: str, names: list[str], timeout: float,
+                    *extra: str) -> RunResult:
+        """Один `rclone copy src dst --files-from-raw <список> --transfers N [extra]`."""
         fd, listing = tempfile.mkstemp(prefix="rclone-files-", suffix=".txt")
         try:
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
                 fh.write("".join(n + "\n" for n in names))
             return self._run("copy", src, dst, "--files-from-raw", listing,
-                             "--transfers", str(TRANSFERS), timeout=timeout)
+                             "--transfers", str(TRANSFERS), *extra, timeout=timeout)
         finally:
             Path(listing).unlink(missing_ok=True)
 
@@ -529,6 +531,71 @@ class Drive:
         size = sum((local_dir / n).stat().st_size for n in names)
         self._check(self._copy_batch(str(local_dir), self.spec(path), names,
                                      self._batch_timeout(len(names), size)), "загрузка")
+
+    def _check_upload(self, path: str) -> None:
+        """Приём из Telegram: только папка `<корень>/<год>/<машина>/<SOURCE_SUBDIR>` целиком."""
+        parts = _split(path)
+        ok = (len(parts) == 4 and self._vehicle_parts(parts[:3]) is not None
+              and parts[3] == self.source_subdir)
+        if not ok:
+            raise PermissionError(f"файлы из Telegram — только прямо в «<машина>/{self.source_subdir}»: {path}")
+
+    def file_sizes(self, path: str) -> dict[str, int]:
+        """Имя → размер файлов прямо в папке (без хэшей и подпапок), только чтение; нет папки —
+        пусто."""
+        res = self._run("lsjson", self.spec(path), "--files-only", "--max-depth", "1")
+        if res.returncode != 0 and self._missing(res):
+            return {}
+        self._check(res, "список файлов")
+        out = {}
+        for e in self._json(res, "[]"):
+            if e.get("IsDir") or "/" in str(e.get("Path", e.get("Name", ""))):
+                continue
+            try:
+                out[str(e.get("Name") or "")] = int(e.get("Size", -1))
+            except (TypeError, ValueError):
+                out[str(e.get("Name") or "")] = -1
+        return out
+
+    def file_names(self, path: str) -> set[str]:
+        """Имена файлов прямо в папке, только чтение; нет папки — пусто."""
+        return set(self.file_sizes(path))
+
+    def upload_files(self, local_dir: Path, names: Iterable[str], path: str) -> list[str]:
+        """Файлы из Telegram (`names` из `local_dir`) прямо в `<машина>/<SOURCE_SUBDIR>` одним
+        `rclone copy --ignore-existing`. Никогда не перезаписывает: если любое имя уже лежит в
+        папке (листинг перед заливкой) — FileExistsError, rclone copy не зовётся; гонку между
+        листингом и заливкой закрывает `--ignore-existing`. Путь не папка «Фотографии» машины,
+        имя с путём или имя подпапки «На выгрузку» — PermissionError до rclone. Нет папки
+        «Фотографии» — rclone создаст её при заливке (это запись файлов в «Фотографии»).
+
+        Возвращает имена, которых в папке после вызова нет или там лежит файл другого размера
+        (чужой, появившийся между листингом и заливкой: `--ignore-existing` его не тронул).
+        Не легло ни одного и rclone упал → DriveError."""
+        self._check_upload(path)
+        names = self._batch_names(names)
+        if any(n == self.output_subdir for n in names):
+            raise PermissionError(f"имя файла совпадает с папкой «{self.output_subdir}»")
+        if not names:
+            return []
+        local_dir = Path(local_dir)
+        absent = [n for n in names if not (local_dir / n).is_file()]
+        if absent:
+            raise FileNotFoundError(f"нет локальных файлов для заливки: {', '.join(absent)}")
+        clash = sorted(set(names) & self.file_names(path))
+        if clash:
+            raise FileExistsError(f"в «{self.source_subdir}» уже есть: {', '.join(clash)}")
+        size = sum((local_dir / n).stat().st_size for n in names)
+        res = self._copy_batch(str(local_dir), self.spec(path), names,
+                               self._batch_timeout(len(names), size), "--ignore-existing")
+        present = self.file_sizes(path)
+        missing = [n for n in names if present.get(n) != (local_dir / n).stat().st_size]
+        if res.returncode != 0:
+            if len(missing) == len(names):
+                self._check(res, "загрузка")
+            log.warning("заливка пачкой: %d из %d не легли: %s", len(missing), len(names),
+                        " | ".join(_clean_stderr(res.stderr, self.secrets)))
+        return missing
 
     # --- запись (только в разрешённые поддеревья) ---
 

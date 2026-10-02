@@ -9,6 +9,9 @@
 представлением `runs` с прежними колонками: старый API `record_run_*`/`last_runs` работает
 поверх `events`. Версия схемы — `PRAGMA user_version`; перед миграцией файл копируется
 в `<имя>.bak-<дата>` (откат — вернуть копию и старый код).
+
+Версии: 1 — журнал `events` и представление `runs`; 2 — таблица `uploads(file_unique_id, mh,
+ts)`: файлы из Telegram, уже залитые в «Фотографии» машины (ТЗ 3.6, дедупликация загрузок).
 """
 from __future__ import annotations
 
@@ -58,7 +61,18 @@ CREATE INDEX IF NOT EXISTS events_module ON events (module, action, id);
 """
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+
+# Версия 2: дедупликация загрузок из Telegram (ТЗ 5, п. 9). Ключ — файл и машина: тот же снимок
+# в другую машину — не дубль.
+UPLOADS_TABLE = """
+CREATE TABLE IF NOT EXISTS uploads (
+    file_unique_id TEXT NOT NULL,
+    mh             TEXT NOT NULL,
+    ts             TEXT NOT NULL,
+    PRIMARY KEY (file_unique_id, mh)
+)
+"""
 
 # Запуски /fotos в журнале: module/action записи, которую раньше хранила таблица runs.
 RUN_MODULE, RUN_ACTION, RUN_OBJECT = "photos", "convert", "car"
@@ -159,32 +173,42 @@ class Database:
                              (name,)) is not None
 
     def _migrate(self) -> None:
-        """Версия 0 → 1: runs → events. Идемпотентно; при сбое — откат и MigrationError."""
-        if self.schema_version() >= SCHEMA_VERSION:
+        """Версия 0 → 1: runs → events; 1 → 2: таблица uploads. Все шаги — одной транзакцией,
+        перед ней копия базы (если в ней уже были данные). Идемпотентно; при сбое — откат и
+        MigrationError."""
+        version = self.schema_version()
+        if version >= SCHEMA_VERSION:
             return
-        legacy = self._has_table("runs")
-        copy = self.backup() if legacy else None
+        legacy = version < 1 and self._has_table("runs")
+        copy = self.backup() if (legacy or version >= 1) else None
         expected = 0
         try:
             with self.transaction():
-                if legacy:
-                    expected = self.fetchone("SELECT COUNT(*) AS n FROM runs")["n"]
-                    self._copy_legacy_runs()
-                    got = self.fetchone(
-                        "SELECT COUNT(*) AS n FROM events WHERE module = ? AND action = ?",
-                        (RUN_MODULE, RUN_ACTION))["n"]
-                    if got != expected:
-                        raise MigrationError(f"перенесено {got} записей runs из {expected}")
-                    self._conn.execute("DROP TABLE runs")
-                self._conn.execute(RUNS_VIEW)
+                if version < 1:
+                    if legacy:
+                        expected = self.fetchone("SELECT COUNT(*) AS n FROM runs")["n"]
+                        self._copy_legacy_runs()
+                        got = self.fetchone(
+                            "SELECT COUNT(*) AS n FROM events WHERE module = ? AND action = ?",
+                            (RUN_MODULE, RUN_ACTION))["n"]
+                        if got != expected:
+                            raise MigrationError(f"перенесено {got} записей runs из {expected}")
+                        self._conn.execute("DROP TABLE runs")
+                    self._conn.execute(RUNS_VIEW)
+                if version < 2:
+                    self._conn.execute(UPLOADS_TABLE)
                 self._conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         except MigrationError:
             raise
         except Exception as e:
-            raise MigrationError(f"миграция журнала runs → events: {type(e).__name__}: {e}") from e
+            raise MigrationError(f"миграция схемы {version} → {SCHEMA_VERSION}: "
+                                 f"{type(e).__name__}: {e}") from e
         if legacy:
             log.warning("журнал runs перенесён в events: %d записей; копия базы до миграции — %s",
                         expected, copy)
+        elif copy is not None:
+            log.warning("схема базы %d → %d; копия базы до миграции — %s", version,
+                        SCHEMA_VERSION, copy)
 
     def _copy_legacy_runs(self) -> None:
         self._conn.execute(_COPY_RUNS)
@@ -241,6 +265,17 @@ class Database:
             except ValueError:
                 row["payload"] = {}
         return rows
+
+    # --- загрузки из Telegram (дедупликация, ТЗ 3.6) --------------------------
+    def upload_seen(self, file_unique_id: str, mh: str) -> bool:
+        """Этот файл Telegram уже залит в «Фотографии» машины mh."""
+        return self.fetchone("SELECT 1 AS x FROM uploads WHERE file_unique_id = ? AND mh = ?",
+                             (file_unique_id, mh)) is not None
+
+    def record_upload(self, file_unique_id: str, mh: str) -> None:
+        """Файл залит: повторная отправка того же файла для той же машины — дубль."""
+        self.execute("INSERT OR IGNORE INTO uploads (file_unique_id, mh, ts) VALUES (?, ?, ?)",
+                     (file_unique_id, mh, self.now_iso()))
 
     # --- запуски /fotos (прежний API поверх events) -------------------------
     def record_run_start(self, mh: str, telegram_id: int | None, user_name: str | None,

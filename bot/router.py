@@ -17,6 +17,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
 
 from core.db import RUN_ACTION, RUN_MODULE, Database
+from core.dialog import CANCELLED
 from core.queue import JobQueue
 
 from . import menu as menu_mod
@@ -34,6 +35,8 @@ RESULTS = {
     "failed": "ошибка",
     "interrupted": "прервано",
     "running": "идёт",
+    "cancelled": "отменено",
+    "expired": "истекло",
 }
 
 
@@ -108,12 +111,19 @@ def make_router(queue: JobQueue, db: Database, tz: str, module_help: Iterable[st
             await message.answer(help_message)
         else:
             # открытый диалог закрывается молча: иначе следующая кнопка меню ушла бы в диалог;
-            # номер прошлого экрана сохраняется — новое меню его удалит
+            # номер прошлого экрана сохраняется — новое меню его удалит; режимы модулей (приём
+            # файлов) закрываются крючками отмены
+            await menu.run_cancel_hooks(message, state)
             await menu_mod.reset(state)
             await menu_mod.show(message, menu, state)
 
     @router.message(Command("cancel"))
     async def on_cancel(message: Message, state: FSMContext) -> None:
+        if menu is not None and await menu.run_cancel_hooks(message, state):
+            # закрыт режим модуля (приём файлов); открытый диалог, если был, — тоже
+            await menu_mod.reset(state)
+            await menu_mod.show_screen(message, menu, state, menu_mod.ROOT, text=CANCELLED)
+            return
         if dialogs is None:
             await state.clear()
             await menu_mod.answer(message, "Нечего отменять")

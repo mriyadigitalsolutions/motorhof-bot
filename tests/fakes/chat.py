@@ -6,8 +6,8 @@ from __future__ import annotations
 from datetime import datetime
 
 from aiogram.methods import AnswerCallbackQuery, DeleteMessage, EditMessageText, SendMessage
-from aiogram.types import (CallbackQuery, Chat, InlineKeyboardMarkup, Message,
-                           ReplyKeyboardMarkup, Update, User)
+from aiogram.types import (CallbackQuery, Chat, Document, InlineKeyboardMarkup, Message,
+                           PhotoSize, ReplyKeyboardMarkup, Update, User)
 
 
 class Partner:
@@ -32,6 +32,28 @@ class Partner:
         await self.app.dispatcher.feed_update(self.bot, Update(update_id=self.n[0], message=Message(
             message_id=self.n[0], date=datetime(2026, 10, 1), text=text, from_user=self._user(),
             chat=self._chat())))
+
+    async def send_file(self, name=None, *, mime="image/jpeg", size=1000, uid=None,
+                        album=None, photo=False, date=None):
+        """Файл как «Файл» (документ name) или, с photo=True, как «Фото» (сжатое, без имени);
+        album — media_group_id альбома; uid — file_unique_id (по умолчанию — от номера
+        сообщения). Возвращает номер сообщения."""
+        self.n[0] += 1
+        self.last_id = mid = self.n[0]
+        uid = uid or f"u{mid}"
+        kw = {}
+        if photo:
+            kw["photo"] = [PhotoSize(file_id=f"small-{uid}", file_unique_id=f"s-{uid}", width=90,
+                                     height=60, file_size=100),
+                           PhotoSize(file_id=f"f-{uid}", file_unique_id=uid, width=2560,
+                                     height=1706, file_size=size)]
+        else:
+            kw["document"] = Document(file_id=f"f-{uid}", file_unique_id=uid, file_name=name,
+                                      mime_type=mime, file_size=size)
+        await self.app.dispatcher.feed_update(self.bot, Update(update_id=mid, message=Message(
+            message_id=mid, date=date or datetime(2026, 10, 1), from_user=self._user(),
+            chat=self._chat(), media_group_id=album, **kw)))
+        return mid
 
     async def press(self, data, message_id=None):
         self.n[0] += 1

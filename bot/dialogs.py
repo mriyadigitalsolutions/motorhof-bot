@@ -139,6 +139,58 @@ class Dialogs:
             log.exception("диалог %s: ошибка на шаге «Выполнить»", dialog.id)
             return FAILED
 
+    # --- экраны для модулей, которые ведут разговор сами (кнопка с entry) ----------
+    # Модули не импортируют bot/: команда получает этот объект аргументом dialogs
+    # (dp["dialogs"]), кнопка с entry — четвёртым аргументом. Так экран модуля живёт по общим
+    # правилам чистого чата (present) и возвращается в карточку машины или главное меню.
+
+    async def present(self, message: Message, state: FSMContext | None, text: str,
+                      rows: list[list[str]] | None, *, screen: bool = True,
+                      screen_id: str | None = None, data: dict | None = None) -> None:
+        """Ответ с клавиатурой rows (bot.menu.present). screen_id — свой экран модуля: меню его
+        не знает, поэтому подписи его кнопок не перехватывает, а «Назад» ведёт в главное меню;
+        data — ещё ключи в данные FSM партнёра (до удаления прошлого экрана)."""
+        data = dict(data or {})
+        if screen_id is not None:
+            data[menu_mod.SCREEN_KEY] = screen_id
+        await menu_mod.present(message, state, text, rows, screen=screen, data=data or None)
+
+    async def answer(self, message: Message, text: str) -> None:
+        """Итоговый ответ без смены клавиатуры (в группе — reply)."""
+        await menu_mod.answer(message, text)
+
+    async def show_car(self, message: Message, state: FSMContext, code: str,
+                       text: str | None = None) -> None:
+        """Клавиатура карточки машины code с итогом text; без меню — просто ответ."""
+        if self.menu is None or self.menu.cars_node is None:
+            await menu_mod.answer(message, text or code)
+            return
+        await menu_mod.show_car(message, self.menu, state, code, text)
+
+    async def show_root(self, message: Message, state: FSMContext, text: str | None = None) -> None:
+        """Главное меню; text — итог вместо текста экрана."""
+        if self.menu is None:
+            if text:
+                await menu_mod.answer(message, text)
+            return
+        await menu_mod.reset(state)
+        await menu_mod.show_screen(message, self.menu, state, menu_mod.ROOT, text=text)
+
+    async def open_cars(self, message: Message, state: FSMContext, then: str | None = None) -> bool:
+        """Список машин в наличии (кнопками или вводом номера); then — «модуль:кнопка»
+        карточки, куда сразу уйдёт выбранная машина. False — списка в меню нет."""
+        if self.menu is None or self.menu.cars_node is None:
+            return False
+        await menu_mod.open_cars(message, state, self.menu, then=then)
+        return True
+
+    async def leave(self, state: FSMContext) -> None:
+        """Закрыть открытый диалог молча (как /menu), экран и выбранная машина остаются."""
+        await menu_mod.reset(state)
+
+    async def delete_press(self, message: Message) -> None:
+        await menu_mod.delete_press(message)
+
     def router(self) -> Router:
         """Текст партнёра, у которого открыт диалог (команды — мимо)."""
         router = Router(name="dialogs")

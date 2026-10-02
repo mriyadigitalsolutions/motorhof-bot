@@ -141,3 +141,65 @@ def test_events_api_for_other_modules(db, clock):
     assert db.last_runs(10) == []  # чужие события в представление runs не попадают
     raw = db.fetchone("SELECT payload_json FROM events WHERE id = ?", (first,))["payload_json"]
     assert "НАЛИЧИЕ" in raw and json.loads(raw)["folder_id"] == "abc"
+
+
+# --- версия 2: таблица uploads (ТЗ 5, п. 9) ---
+
+def v1_db(path, clock):
+    """База в том виде, в каком её оставила версия 1: events с записями, без uploads."""
+    db = Database(path, clock=clock)
+    db.log_event("vehicle", "folder_created", actor_id=11, object_id="MH_1042",
+                 payload={"user_name": "Anna"})
+    db.record_run_start("MH_1022", 11, "Anna")
+    db.execute("DROP TABLE uploads")
+    db.execute("PRAGMA user_version = 1")
+    db.close()
+
+
+def test_v1_to_v2_adds_uploads_keeps_events_and_backs_up(tmp_path, clock):
+    path = tmp_path / "motorhof.sqlite"
+    v1_db(path, clock)
+    clock.advance(minutes=1)
+    db = Database(path, clock=clock)
+    assert db.schema_version() == SCHEMA_VERSION == 2
+    assert kind(db, "uploads") == "table" and kind(db, "runs") == "view"
+    assert [e["object_id"] for e in db.last_events(10)] == ["MH_1022", "MH_1042"]
+    assert db.last_runs(1)[0]["mh"] == "MH_1022"
+    assert not db.upload_seen("AgADx", "MH_1022")
+    db.record_upload("AgADx", "MH_1022")
+    db.record_upload("AgADx", "MH_1022")  # повтор не падает
+    assert db.upload_seen("AgADx", "MH_1022") and not db.upload_seen("AgADx", "MH_1023")
+    assert db.fetchone("SELECT COUNT(*) AS n FROM uploads")["n"] == 1
+    db.close()
+    backups = list(tmp_path.glob("motorhof.sqlite.bak-*"))
+    assert len(backups) == 1
+    conn = sqlite3.connect(backups[0])
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 2
+    conn.close()
+
+
+def test_legacy_runs_go_straight_to_v2(tmp_path, clock):
+    path = tmp_path / "motorhof.sqlite"
+    legacy_db(path)
+    db = Database(path, clock=clock)
+    assert db.schema_version() == 2 and kind(db, "uploads") == "table"
+    assert len(db.last_events(10)) == len(ROWS)
+    db.close()
+
+
+def test_failed_v2_step_rolls_back(tmp_path, clock, monkeypatch):
+    import core.db as core_db
+    path = tmp_path / "motorhof.sqlite"
+    v1_db(path, clock)
+    monkeypatch.setattr(core_db, "UPLOADS_TABLE", "CREATE TABLE broken (")
+    with pytest.raises(MigrationError, match="1 → 2"):
+        Database(path, clock=clock)
+    conn = sqlite3.connect(path)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM events").fetchone()[0] == 2
+    conn.close()
+    monkeypatch.undo()
+    db = Database(path, clock=clock)
+    assert db.schema_version() == 2 and kind(db, "uploads") == "table"
+    db.close()

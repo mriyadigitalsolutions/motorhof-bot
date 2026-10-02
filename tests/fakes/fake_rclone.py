@@ -2,7 +2,7 @@
 
 Понимает то подмножество rclone, которым пользуется Drive-слой: `lsjson` (`--dirs-only`,
 `--files-only`, `--max-depth`, `--hash`, `--stat`), `copyto`, `copy` (`--files-from-raw`,
-`--transfers`), `moveto` (файл или папка целиком), `mkdir`, `deletefile`, `size --json`. `copy` — как rclone 1.71.1: имени из списка нет
+`--transfers`, `--ignore-existing`), `moveto` (файл или папка целиком), `mkdir`, `deletefile`, `size --json`. `copy` — как rclone 1.71.1: имени из списка нет
 в источнике — молча пропускается (код 0), папка назначения создаётся, нет папки-источника — код 3.
 Отдаёт `ID` и `Hashes.sha256` как Google Drive; `lsjson --stat` по папке —
 ошибка (на общем диске Drive он медленный и без `ID`): папки ищутся листингом родителя. Путь `<remote>:<путь>` ведёт в `base/<путь>`,
@@ -246,6 +246,8 @@ class FakeRclone:
         for name in names:
             if not (src / name).is_file():
                 continue  # как rclone: отсутствующее в источнике молча пропускается
+            if "--ignore-existing" in flags and (dst / name).exists():
+                continue  # как rclone: существующий в цели файл не трогается
             left = self._broken.get(name, 0)
             if name in self._broken and (left is None or left > 0):
                 if left is not None:

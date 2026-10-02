@@ -1,18 +1,21 @@
 """Модуль drive: экран «Google Drive» в главном меню, «Создать папку машины» (/neu),
-«В продано» (/verkauft), «Вернуть в наличие» (/zurueck), «Машины в наличии» (/lager).
+«В продано» (/verkauft), «Вернуть в наличие» (/zurueck), «Машины в наличии» (/lager),
+«Добавить фотографии» (/upload, upload.py, задача "drive.upload").
 
 Подкоманды Drive публикуют в этот экран свои кнопки через parent="drive": «Форматировать
 фото» — модуль photos; «📂 Создать папку» — этот модуль (vehicle.py, задача "drive.mkdir");
 «🏁 В продано» и «↩️ Вернуть в наличие» — этот модуль (transfer.py, задачи "drive.sell" и
 "drive.unsell"); «🚗 Машины в наличии» — список и карточка машины (stock.py, меню рисует
 bot/menu.py). В карточку машины кнопки публикуются через parent="car" (CAR): «📸
-Форматировать фото» — photos; «🏁 В продано» и «📥 Добавить фотографии» — этот модуль.
+Форматировать фото» — photos; «🏁 В продано» и «📥 Добавить фотографии» — этот модуль
+(«📥 Добавить фотографии» есть и в экране Google Drive: там сначала выбор машины).
 Порядок и активность — modules.MENU. Общее для задач модуля — jobs.py.
 """
 from __future__ import annotations
 
 import asyncio
 
+from aiogram import F
 from aiogram.filters import Command, CommandObject
 from aiogram.fsm.context import FSMContext
 from aiogram.types import Message
@@ -23,6 +26,7 @@ from core.settings import Settings, load_settings
 
 from .stock import Stock
 from .transfer import RETURN, SELL, Mover
+from .upload import Uploads
 from .vehicle import FolderCreator
 
 MODULE = "drive"
@@ -48,13 +52,15 @@ STOCK_ICON = "🚗"
 CAR = "car"  # карточка машины в меню (bot/menu.py CAR): кнопки для выбранной машины
 CAR_SELL_ACTION = "car_sell"
 UPLOAD_ACTION = "car_upload"
+UPLOAD_SCREEN_ACTION = "upload"
+UPLOAD_COMMAND = "upload"
 UPLOAD_TITLE = "Добавить фотографии"
 UPLOAD_ICON = "📥"
-UPLOAD_PENDING = "В разработке"
 HELP = ("/neu — создать папку новой машины на Drive (то же, что «Создать папку» в меню)\n"
         "/verkauft MH_1022 — перенести папку машины в ПРОДАНО (без номера — спросит)\n"
         "/zurueck MH_1022 — вернуть папку машины из ПРОДАНО в НАЛИЧИЕ (без номера — спросит)\n"
-        "/lager — машины в наличии: список и карточка машины")
+        "/lager — машины в наличии: список и карточка машины\n"
+        "/upload MH_1022 — добавить фото машины из Telegram в «Фотографии» (без номера — спросит)")
 NO_DIALOGS = "Диалоги недоступны: открой /menu"
 
 
@@ -98,16 +104,12 @@ def make_move_command(mover: Mover):
     return on_move
 
 
-def upload_pending(ctx) -> str:
-    """«📥 Добавить фотографии» в карточке машины (ctx.car — код) — точка подключения фазы D,
-    часть 2: заменить handler на dialog=<диалог загрузки>, car_entry=<код → (values, шаг)>."""
-    return UPLOAD_PENDING
-
-
 def register(router, queue, *, menu=None, settings: Settings | None = None,
              drive: Drive | None = None, **_: object) -> FolderCreator:
     """Экран «Google Drive»; /neu, кнопка «Создать папку», задача drive.mkdir; /verkauft,
-    /zurueck, кнопки «В продано» и «Вернуть в наличие», задачи drive.sell и drive.unsell.
+    /zurueck, кнопки «В продано» и «Вернуть в наличие», задачи drive.sell и drive.unsell;
+    /upload, кнопки «Добавить фотографии» (экран drive и карточка), фото и документы из
+    Telegram, задача drive.upload.
     settings и drive по умолчанию — из окружения (как у photos). Возвращает FolderCreator."""
     settings = settings or load_settings()
     drive = drive or Drive.from_settings(settings)
@@ -121,8 +123,19 @@ def register(router, queue, *, menu=None, settings: Settings | None = None,
         queue.register_kind(mover.KIND, mover.handle, on_interrupted=mover.interrupted)
         router.message.register(make_move_command(mover), Command(command))
         movers[direction.kind] = mover
+    uploads = Uploads(queue, drive, tmp_dir=settings.tmp_dir, tz=settings.tz,
+                      max_upload_mb=settings.max_upload_mb, secrets=settings.secrets(),
+                      action=f"{MODULE}:{UPLOAD_ACTION}")
+    queue.register_kind(uploads.KIND, uploads.handle, on_interrupted=uploads.interrupted)
+    uploads.cleanup_orphans()  # приём, оборванный перезапуском: его файлы не нужны
+    router.message.register(uploads.command, Command(UPLOAD_COMMAND))
+    router.message.register(uploads.on_file, F.photo | F.document)
+    router.message.register(uploads.on_text, uploads.wants_text)
     if menu is not None:
         menu.section(SCREEN, TITLE, icon=ICON)
+        menu.on_cancel(uploads.on_cancel)  # /cancel, /menu, /start закрывают режим приёма
+        menu.action(UPLOAD_SCREEN_ACTION, UPLOAD_TITLE, parent=SCREEN, order=15,
+                    icon=UPLOAD_ICON, entry=uploads.entry)
         menu.action(CREATE_ACTION, CREATE_TITLE, parent=SCREEN, order=20, icon=CREATE_ICON,
                     dialog=creator.dialog)
         menu.action(SELL_ACTION, SELL_TITLE, parent=SCREEN, order=30, icon=SELL_ICON,
@@ -133,7 +146,7 @@ def register(router, queue, *, menu=None, settings: Settings | None = None,
                       source=Stock(drive, secrets=settings.secrets()), command=STOCK_COMMAND)
         # карточка машины: «📸 Форматировать фото» (order 10) публикует photos
         menu.action(UPLOAD_ACTION, UPLOAD_TITLE, parent=CAR, order=20, icon=UPLOAD_ICON,
-                    handler=upload_pending)
+                    entry=uploads.entry)
         menu.action(CAR_SELL_ACTION, SELL_TITLE, parent=CAR, order=30, icon=SELL_ICON,
                     dialog=movers[SELL.kind].dialog, car_entry=movers[SELL.kind].car_entry)
     return creator

@@ -40,6 +40,14 @@ reply с allow_sending_without_reply, клавиатура остаётся у �
 обработчику — `Context.car`. После диалога — снова клавиатура карточки; «Назад» — список на той
 же странице (заново с Drive). Подписи карточки ищутся только на экране "car", поэтому могут
 совпадать с подписями обычных кнопок («📸 Форматировать фото» есть и в экране Google Drive).
+
+Кнопка со своим экраном (`action(..., entry=…)`): модуль сам ведёт разговор, не диалогом —
+например, режим приёма файлов «Добавить фотографии». Нажатие зовёт `entry(message, state, ctx,
+ui)`: ctx.car — машина карточки, ui — `bot.dialogs.Dialogs` (present, show_car, open_cars …).
+Крючки отмены (`on_cancel(fn)`, `async fn(message, state) -> bool`): /cancel, /menu и /start
+зовут их до своей работы — так модуль закрывает свой режим (приём файлов) без импорта bot/.
+Список машин можно открыть «для действия» (`open_cars(..., then="модуль:кнопка")`): выбранная
+машина сразу идёт в эту кнопку карточки, без показа карточки.
 """
 from __future__ import annotations
 
@@ -86,6 +94,10 @@ PREV_LABEL = "◀️ Назад по списку"
 NEXT_LABEL = "▶️ Дальше"
 NO_CARS = "В наличии машин нет"
 CarEntry = Callable[[str], "tuple[dict, int]"]
+# кнопка со своим экраном: entry(message, state, ctx, ui) — ui это bot.dialogs.Dialogs
+Entry = Callable[..., Awaitable[None]]
+# крючок отмены модуля: (message, state) -> закрыл ли он что-то
+CancelHook = Callable[[Any, Any], Awaitable[bool]]
 
 _ID = re.compile(r"^[a-z0-9_]{1,20}$")
 _RESERVED = {MENU_MODULE, "dlg"}
@@ -113,6 +125,7 @@ class Node:
     car_entry: CarEntry | None = None  # кнопка карточки с диалогом: код → (values, step)
     source: Any = None  # kind="cars": источник списка машин и карточки
     command: str | None = None  # kind="cars": команда, открывающая список (без «/»)
+    entry: Entry | None = None  # кнопка со своим экраном (модуль ведёт разговор сам)
 
     @property
     def label(self) -> str:
@@ -158,6 +171,7 @@ class Menu:
         self._actions: dict[tuple[str, str], Node] = {}
         self._overrides: dict[str, dict[str, Any]] = {}
         self._seq = 0
+        self._cancel_hooks: list[CancelHook] = []
 
     def _next_seq(self) -> int:
         self._seq += 1
@@ -187,14 +201,15 @@ class Menu:
     def action(self, id: str, title: str, *, module: str, parent: str, order: int = 100,
                enabled: bool = True, dialog: Dialog | None = None,
                handler: Handler | None = None, icon: str = "",
-               car_entry: CarEntry | None = None) -> Node:
+               car_entry: CarEntry | None = None, entry: Entry | None = None) -> Node:
         """parent=CAR — кнопка карточки машины: с диалогом нужен car_entry(код) -> (values,
         step) — с какого шага начать диалог для этой машины (Invalid — ответ партнёру);
-        обработчик получает код в Context.car."""
+        обработчик получает код в Context.car. entry — кнопка со своим экраном:
+        entry(message, state, ctx, ui), ctx.car — машина карточки."""
         _check_id(id, "кнопка")
         _check_icon(icon, f"{module}:{id}")
-        if (dialog is None) == (handler is None):
-            raise ValueError(f"кнопка {module}:{id}: нужен ровно один из dialog или handler")
+        if sum(x is not None for x in (dialog, handler, entry)) != 1:
+            raise ValueError(f"кнопка {module}:{id}: нужен ровно один из dialog, handler или entry")
         if parent == CAR and dialog is not None and car_entry is None:
             raise ValueError(f"кнопка {module}:{id}: в карточке машины диалогу нужен car_entry")
         if parent != CAR and car_entry is not None:
@@ -202,7 +217,7 @@ class Menu:
         if (module, id) in self._actions:
             raise ValueError(f"кнопка {module}:{id} уже объявлена")
         node = Node("action", id, title, parent, order, enabled, module, dialog, handler,
-                    seq=self._next_seq(), icon=icon, car_entry=car_entry)
+                    seq=self._next_seq(), icon=icon, car_entry=car_entry, entry=entry)
         self._actions[(module, id)] = node
         return node
 
@@ -224,6 +239,20 @@ class Menu:
                     icon=icon, source=source, command=command)
         self._actions[(module, id)] = node
         return node
+
+    def on_cancel(self, hook: CancelHook) -> None:
+        """Крючок для /cancel, /menu, /start: модуль закрывает свой режим (не диалог)."""
+        self._cancel_hooks.append(hook)
+
+    async def run_cancel_hooks(self, message, state) -> bool:
+        """Все крючки по порядку; True — хоть один что-то закрыл. Сбой крючка — в лог."""
+        closed = False
+        for hook in self._cancel_hooks:
+            try:
+                closed = bool(await hook(message, state)) or closed
+            except Exception:
+                log.exception("крючок отмены %r упал", hook)
+        return closed
 
     @property
     def cars_node(self) -> Node | None:
@@ -331,6 +360,8 @@ class Menu:
             return Press("screen", node.id, self.screen(node.id))
         if node.kind == "cars":
             return Press("cars", node.parent, node=node)
+        if node.entry is not None:
+            return Press("entry", node.parent, node=node)
         return Press("dialog" if node.dialog is not None else "handler", node.parent, node=node)
 
     # --- список машин и карточка ----------------------------------------------
@@ -352,6 +383,12 @@ class Menu:
     def car_rows(self) -> Rows:
         """Клавиатура карточки машины: кнопки модулей (parent=CAR) и «Назад»."""
         return layout([n.label for n in self.children(CAR)], [BACK])
+
+    def action_node(self, key: str | None) -> Node | None:
+        """Кнопка действия по ключу «модуль:кнопка»; нет такой — None."""
+        module, _, id = (key or "").partition(":")
+        node = self._actions.get((module, id))
+        return node if node is not None and node.kind == "action" else None
 
     def car_action(self, label: str | None) -> Node | None:
         key = normalize_label(label)
@@ -383,6 +420,9 @@ class ModuleMenu:
     def car_list(self, id: str, title: str, *, parent: str, source: Any, **kwargs) -> Node:
         return self._menu.car_list(id, title, module=self.module, parent=parent, source=source,
                                    **kwargs)
+
+    def on_cancel(self, hook: CancelHook) -> None:
+        self._menu.on_cancel(hook)
 
 
 def _check_id(value: str, what: str) -> None:
@@ -526,6 +566,9 @@ async def handle_label(message: Message, state: FSMContext, menu: Menu, dialogs)
     elif press.kind == "dialog":
         await dialogs.start(press.node.dialog, message, state, message.from_user,
                             return_screen=press.screen_id)
+    elif press.kind == "entry":
+        await press.node.entry(message, state, context(message.from_user, message.chat.id),
+                               dialogs)
     else:
         text = await call(press.node.handler, context(message.from_user, message.chat.id))
         await show_screen(message, menu, state, press.screen_id, text=text)
@@ -563,22 +606,36 @@ def _labels(choices: list[Choice]) -> list[list[Any]]:
 
 
 async def open_cars(message: Message, state: FSMContext, menu: Menu, node: Node | None = None,
-                    page: int = 0) -> None:
-    """Список машин заново с Drive (в потоке) и страница page; ошибка — ответ без клавиатуры."""
+                    page: int = 0, then: str | None = None) -> None:
+    """Список машин заново с Drive (в потоке) и страница page; ошибка — ответ без клавиатуры.
+    then — «модуль:кнопка» карточки: выбранная машина сразу идёт в это действие."""
     node = node or menu.cars_node
     try:
         choices = await asyncio.to_thread(node.source.list_cars)
     except Invalid as e:
         await answer(message, e.text)
         return
-    await _show_cars(message, state, menu, _labels(list(choices)), page)
+    await _show_cars(message, state, menu, _labels(list(choices)), page, then)
 
 
 async def _show_cars(message: Message, state: FSMContext, menu: Menu, items: list[list[str]],
-                     page: int) -> None:
+                     page: int, then: str | None = None) -> None:
     screen, page = menu.cars_screen(items, page)
+    cars = {"items": items, "page": page, "code": ""}
+    if then:
+        cars["then"] = then
     await present(message, state, screen.text, screen.rows,
-                  data={SCREEN_KEY: CARS, CARS_KEY: {"items": items, "page": page, "code": ""}})
+                  data={SCREEN_KEY: CARS, CARS_KEY: cars})
+
+
+async def show_car(message: Message, menu: Menu, state: FSMContext, code: str,
+                   text: str | None = None) -> None:
+    """Клавиатура карточки машины code (без Drive): text — итог вместо текста экрана; «Назад» —
+    список машин. Для модулей, которые вернулись в карточку не из диалога."""
+    cars = dict((await state.get_data()).get(CARS_KEY) or {}, code=code)
+    cars.pop("then", None)
+    await state.update_data({CARS_KEY: cars})
+    await show_screen(message, menu, state, CAR, text=text)
 
 
 async def open_car(message: Message, state: FSMContext, menu: Menu, car: Any) -> None:
@@ -606,9 +663,14 @@ async def open_car(message: Message, state: FSMContext, menu: Menu, car: Any) ->
 
 async def run_car_action(message: Message, state: FSMContext, menu: Menu, dialogs, node: Node,
                          code: str) -> None:
-    """Кнопка карточки: диалог с шага car_entry для этой машины или обработчик с Context.car."""
+    """Кнопка карточки: диалог с шага car_entry для этой машины, свой экран модуля (entry) или
+    обработчик с Context.car."""
     if not menu.enabled(node):
         await answer(message, DISABLED)
+        return
+    if node.entry is not None:
+        await node.entry(message, state, context(message.from_user, message.chat.id, car=code),
+                         dialogs)
         return
     if node.dialog is not None:
         try:
@@ -642,7 +704,7 @@ async def handle_cars(message: Message, state: FSMContext, menu: Menu, dialogs) 
             await show_screen(message, menu, state, node.parent)
         elif label in (normalize_label(PREV_LABEL), normalize_label(NEXT_LABEL)):
             step = -1 if label == normalize_label(PREV_LABEL) else 1
-            await _show_cars(message, state, menu, items, page + step)
+            await _show_cars(message, state, menu, items, page + step, cars.get("then"))
         else:
             car = next((c for lab, c in items if normalize_label(lab) == label), None)
             if car is None:
@@ -657,7 +719,12 @@ async def handle_cars(message: Message, state: FSMContext, menu: Menu, dialogs) 
                     return True
                 if car is None:
                     return False
-            await open_car(message, state, menu, car)
+            then = menu.action_node(cars.get("then"))
+            if then is not None:  # список открыт для действия: машина сразу идёт в него
+                await state.update_data({CARS_KEY: dict(cars, code=car_code(car))})
+                await run_car_action(message, state, menu, dialogs, then, car_code(car))
+            else:
+                await open_car(message, state, menu, car)
     else:
         code = cars.get("code") or ""
         if label == normalize_label(BACK):
