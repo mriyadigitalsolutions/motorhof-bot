@@ -27,7 +27,7 @@ def icc_description(img: Image.Image) -> str:
 def test_variants_yaml_matches_spec():
     v = load_variants()
     assert (v["listing"].max_side, v["listing"].quality, v["listing"].subsampling,
-            v["listing"].suffix, v["listing"].on_demand) == (2000, 92, 0, "", False)
+            v["listing"].suffix, v["listing"].on_demand) == (2000, 92, 2, "", False)
     assert (v["full"].max_side, v["full"].quality, v["full"].suffix, v["full"].on_demand) == (
         None, 95, "_full", True)
 

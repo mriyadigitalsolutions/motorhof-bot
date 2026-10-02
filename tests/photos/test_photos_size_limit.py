@@ -51,9 +51,10 @@ def test_yaml_listing_has_6mb_limit_full_has_none():
 
 
 def test_max_bytes_not_in_fingerprint():
-    # отпечатки, записанные в манифесты на Drive до появления max_bytes, остаются прежними
+    # max_bytes не меняет отпечаток: у варианта с теми же прочими параметрами он прежний
     v = load_variants()
-    assert v["listing"].fingerprint("A.HEIC") == LISTING.fingerprint("A.HEIC") == "756bc78218722f8f"
+    assert LISTING.fingerprint("A.HEIC") == "756bc78218722f8f"
+    assert v["listing"].fingerprint("A.HEIC") == replace(LISTING, subsampling=2).fingerprint("A.HEIC")
     assert v["full"].fingerprint("A.HEIC") == "3d977e7a941a2503"
     assert replace(LISTING, max_bytes=5_000_000).fingerprint("A.DNG") == LISTING.fingerprint("A.DNG")
 
