@@ -58,7 +58,7 @@ docs/adr/       решения; 0008 — реестр меню
 - `docs/TZ.md` — главный документ (ТЗ v1.0); `PLAN.md` — спецификация модуля photos. Оба не менять без прямого указания, расхождение — вопрос заказчику.
 - `modules/photos/job.py` — `run(code, variants, drive, workdir, progress, *, announce) -> Report`; ошибки — подклассы `JobError(user_text)`.
 - `modules/photos/manifest.py` — `_manifest.json`, `Manifest.execute`, `sha256_file`, `MANIFEST_NAME` (единственное место).
-- `modules/photos/variants.yaml` — варианты JPEG (`listing` всегда, `full` по `on_demand`); новые варианты — только здесь.
+- `modules/photos/variants.yaml` — варианты JPEG (`listing` всегда, `full` по `on_demand`); новые варианты — только здесь. Необязательный `max_bytes` (у `listing` 6000000 — willhaben): JPEG больше предела пересжимается в `convert.fit_size` (quality −4 до 75, затем сторона ×0.9 до 800 px; не уложился — пишется последний, `ImageMeta.over_limit`), итог — строки в `Report.text()`; `max_bytes` в отпечаток не входит: его смена не пересчитывает старые файлы, предел применяется к новым рендерам.
 - `core/drive.py` — все вызовы rclone и проверка разрешённых путей; `mkdir_vehicle` — единственная дверь для новой машины, `move_vehicle` — для переноса НАЛИЧИЕ ↔ ПРОДАНО, `size` — счёт файлов числами (ADR 0009).
 - `tests/fakes/fake_rclone.py` — `FakeRclone(base, ...)`: `motorhof:X` → `base/X`, `.fail(...)`, `.calls`, `.trashed`; `moveto` файла и папки, `size --json`.
 - `tests/test_packaging.py` — сверяет Dockerfile, docker-compose.yml, .env.example, .dockerignore с `core/settings.py`.

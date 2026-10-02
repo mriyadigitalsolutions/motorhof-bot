@@ -55,6 +55,7 @@ class Variant:
     subsampling: int = 0
     suffix: str = ""
     on_demand: bool = False
+    max_bytes: int | None = None  # предел размера файла; больше → пересжатие (fit_size)
 
     def fingerprint(self, src_name: str | None = None) -> str:
         """Отпечаток параметров, влияющих на пиксели; хранится в манифесте.
@@ -63,8 +64,10 @@ class Variant:
         выходы из DNG под теми же именами, а у HEIC/JPG отпечаток остаётся прежним.
         Метка ставится по расширению имени, а не по содержимому: план строится до скачивания.
         У .DNG, оказавшегося JPEG/HEIC, она лишняя, но стабильна — повтор ничего не пересчитывает.
+        max_bytes не входит: предел применяется к новым рендерам, старые файлы не пересчитываются.
         """
-        params = {k: v for k, v in asdict(self).items() if k not in ("name", "suffix", "on_demand")}
+        params = {k: v for k, v in asdict(self).items()
+                  if k not in ("name", "suffix", "on_demand", "max_bytes")}
         if src_name is not None and Path(src_name).suffix.lower() in RAW_SUFFIXES:
             params["dng"] = DNG_METHOD
         raw = json.dumps(params, sort_keys=True).encode()
@@ -79,6 +82,8 @@ class ImageMeta:
     height: int
     make: str | None = None
     model: str | None = None
+    reduced: bool = False       # JPEG пересжат под max_bytes варианта
+    over_limit: bool = False    # не уложился в max_bytes даже на минимуме (записан последний)
 
 
 def load_variants(path: Path | None = None) -> dict[str, Variant]:
@@ -94,11 +99,13 @@ def load_variants(path: Path | None = None) -> dict[str, Variant]:
             subsampling=int(p.get("subsampling", 0)),
             suffix=str(p.get("suffix") or ""),
             on_demand=bool(p.get("on_demand", False)),
+            max_bytes=int(p["max_bytes"]) if p.get("max_bytes") is not None else None,
         )
     return result
 
 
-def _meta(ex: Image.Exif | None, size: tuple[int, int]) -> ImageMeta:
+def _meta(ex: Image.Exif | None, size: tuple[int, int], *,
+          reduced: bool = False, over_limit: bool = False) -> ImageMeta:
     return ImageMeta(
         taken=exif_mod.taken(ex),
         offset=exif_mod.offset(ex),
@@ -106,6 +113,8 @@ def _meta(ex: Image.Exif | None, size: tuple[int, int]) -> ImageMeta:
         height=size[1],
         make=ex.get(exif_mod.MAKE) if ex is not None else None,
         model=ex.get(exif_mod.MODEL) if ex is not None else None,
+        reduced=reduced,
+        over_limit=over_limit,
     )
 
 
@@ -280,8 +289,52 @@ def _resize(img: Image.Image, max_side: int | None) -> Image.Image:
     return img.resize((max(1, round(w * k)), max(1, round(h * k))), Image.Resampling.LANCZOS)
 
 
+# Пересжатие под max_bytes (willhaben: не больше 6 МБ на снимок): quality шагом FIT_QUALITY_STEP
+# до FIT_MIN_QUALITY, затем длинная сторона ×FIT_SIDE_FACTOR при FIT_MIN_QUALITY, но не ниже FIT_MIN_SIDE.
+FIT_QUALITY_STEP = 4
+FIT_MIN_QUALITY = 75
+FIT_SIDE_FACTOR = 0.9
+FIT_MIN_SIDE = 800
+
+
+def _encode(img: Image.Image, quality: int, subsampling: int, exif: bytes) -> bytes:
+    buf = io.BytesIO()
+    img.save(buf, "JPEG", quality=quality, subsampling=subsampling,
+             icc_profile=_SRGB_BYTES, exif=exif, optimize=True)
+    return buf.getvalue()
+
+
+def fit_size(img: Image.Image, variant: Variant, exif: bytes) -> tuple[bytes, Image.Image, bool]:
+    """JPEG ≤ variant.max_bytes: сначала ниже quality, потом меньше сторона (от исходного кадра).
+
+    Возвращает (байты, кадр, уложился ли). Не уложился и на FIT_MIN_SIDE — последняя попытка.
+    Зовётся, только когда обычный JPEG варианта вышел больше предела.
+    """
+    limit = variant.max_bytes
+    floor = min(FIT_MIN_QUALITY, variant.quality)
+    qualities = list(range(variant.quality - FIT_QUALITY_STEP, floor, -FIT_QUALITY_STEP)) + [floor]
+    data = b""
+    for q in qualities:
+        data = _encode(img, q, variant.subsampling, exif)
+        if len(data) <= limit:
+            return data, img, True
+    side, cur = max(img.size), img
+    while True:
+        side = int(side * FIT_SIDE_FACTOR)
+        if side < FIT_MIN_SIDE:
+            return data, cur, False
+        cur = _resize(img, side)
+        data = _encode(cur, floor, variant.subsampling, exif)
+        if len(data) <= limit:
+            return data, cur, True
+
+
 def to_jpeg(src: Path, variant: Variant, dst: Path) -> ImageMeta:
-    """Конвертирует исходник в JPEG варианта. Пишет в dst.part и переименовывает."""
+    """Конвертирует исходник в JPEG варианта. Пишет в dst.part и переименовывает.
+
+    У варианта с max_bytes JPEG больше предела пересжимается в памяти (fit_size) и пишется в тот
+    же dst.part; факты — в ImageMeta.reduced / over_limit.
+    """
     src, dst = Path(src), Path(dst)
     try:
         img, ex = _decode(src)
@@ -291,11 +344,17 @@ def to_jpeg(src: Path, variant: Variant, dst: Path) -> ImageMeta:
     except Exception as e:  # noqa: BLE001 — любая ошибка декодера = файл повреждён
         raise ConvertError(UNREADABLE) from e
     part = dst.with_name(dst.name + ".part")
+    reduced = over = False
     try:
+        exif = exif_mod.clean(ex).tobytes()
         img.save(part, "JPEG", quality=variant.quality, subsampling=variant.subsampling,
-                 icc_profile=_SRGB_BYTES, exif=exif_mod.clean(ex).tobytes(), optimize=True)
+                 icc_profile=_SRGB_BYTES, exif=exif, optimize=True)
+        if variant.max_bytes and part.stat().st_size > variant.max_bytes:
+            data, img, fits = fit_size(img, variant, exif)
+            part.write_bytes(data)
+            reduced, over = True, not fits
         part.replace(dst)
     except Exception as e:
         part.unlink(missing_ok=True)
         raise ConvertError(f"не удалось записать JPEG ({type(e).__name__}: {e})") from e
-    return _meta(ex, img.size)
+    return _meta(ex, img.size, reduced=reduced, over_limit=over)

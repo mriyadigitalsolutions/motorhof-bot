@@ -478,3 +478,26 @@ def test_source_without_drive_hash_not_downloaded_is_error_not_orphan(base, fake
     manifest = json.loads((out / "_manifest.json").read_text(encoding="utf-8"))
     assert {f["out"]: (f["src"], f["orphan"]) for f in manifest["files"]} == \
         {"MH_1022_01.jpg": ("p0.jpg", False), "MH_1022_02.jpg": ("p1.jpg", False)}
+
+
+def test_report_counts_jpegs_reduced_under_limit(base, fake, drive, workdir):
+    """max_bytes варианта: пересжатые JPEG — строкой в отчёте, файлы на Drive не больше предела."""
+    import os
+    from dataclasses import replace
+
+    from PIL import Image
+
+    from modules.photos.convert import load_variants
+    photos = make_car(base)
+    for i in range(2):
+        img = Image.frombytes("RGB", (600, 450), os.urandom(600 * 450 * 3))
+        img = img.resize((1200, 900), Image.Resampling.BILINEAR)  # шум, плохо жмётся
+        img.save(photos / f"p{i}.jpg", "JPEG", quality=95)
+    make_jpeg(photos / "small.jpg", datetime(2026, 9, 9))  # гладкий, в предел и так влезает
+    variant = replace(load_variants()["listing"], max_bytes=500_000)
+    report = job.run("MH_1022", [variant], drive, workdir)
+    assert report.done == 3
+    assert "2 снимка уменьшено под лимит 0.5 МБ" in report.text()
+    out = photos / "На выгрузку"
+    assert all(p.stat().st_size <= 500_000 for p in out.glob("*.jpg"))
+    assert "лимит" not in job.run("MH_1022", [variant], drive, workdir).text()  # повтор — ничего

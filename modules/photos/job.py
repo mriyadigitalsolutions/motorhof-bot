@@ -78,6 +78,8 @@ class Report:
     duration: float = 0.0                                        # секунды
     link: str | None = None                                      # ссылка на «На выгрузку»
     status: str = "done"                                         # done | partial | empty
+    reduced: list[tuple[str, int]] = field(default_factory=list)     # (JPEG, max_bytes) пересжатые
+    over_limit: list[tuple[str, int]] = field(default_factory=list)  # (JPEG, max_bytes) не уложились
 
     def text(self) -> str:
         if self.status == "empty":
@@ -89,11 +91,30 @@ class Report:
         ]
         if self.orphans:
             lines.append(f"осиротевших: {len(self.orphans)}")
+        for limit, names in _by_limit(self.reduced).items():
+            n = len(names)
+            lines.append(f"{n} {_plural(n, 'снимок уменьшен', 'снимка уменьшено', 'снимков уменьшено')} "
+                         f"под лимит {limit_text(limit)}")
+        for limit, names in _by_limit(self.over_limit).items():
+            lines.append(f"Внимание: больше лимита {limit_text(limit)} даже после уменьшения: "
+                         + ", ".join(names))
         if self.failed:
             lines.append("Ошибки: " + "; ".join(f"{name} — {why}" for name, why in self.failed))
         if self.link:
             lines.append(self.link)
         return "\n".join(lines)
+
+
+def limit_text(max_bytes: int) -> str:
+    """6000000 → «6 МБ» (десятичные мегабайты, как в variants.yaml)."""
+    return f"{max_bytes / 1_000_000:g} МБ"
+
+
+def _by_limit(items: list[tuple[str, int]]) -> dict[int, list[str]]:
+    groups: dict[int, list[str]] = {}
+    for name, limit in items:
+        groups.setdefault(limit, []).append(name)
+    return groups
 
 
 # ---------- помощники ----------
@@ -207,6 +228,7 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
     total = 0
     attempts = 0
     announced = False
+    fitted: dict[str, tuple[bool, int]] = {}  # JPEG → (не уложился, max_bytes) для отчёта
 
     def on_plan(plan: Plan) -> None:
         nonlocal total, announced
@@ -222,7 +244,9 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
     def render(item: RenderItem) -> None:
         nonlocal attempts
         try:
-            to_jpeg(fetch(item.source.name), item.variant, out_local / item.out_name)
+            meta = to_jpeg(fetch(item.source.name), item.variant, out_local / item.out_name)
+            if meta.reduced:
+                fitted[item.out_name] = (meta.over_limit, item.variant.max_bytes)
         finally:
             attempts += 1
             if progress:
@@ -269,6 +293,8 @@ def _run(code: str, variants: list[Variant], drive: Drive, tmp: Path,
         orphans=list(ex.plan.orphans),
         link=Drive.folder_link(out_id) if out_exists else None,
         status="partial" if errors else "done",
+        reduced=[(n, lim) for n, (over, lim) in fitted.items() if n in rendered and not over],
+        over_limit=[(n, lim) for n, (over, lim) in fitted.items() if n in rendered and over],
     )
 
 

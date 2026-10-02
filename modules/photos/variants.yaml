@@ -6,6 +6,8 @@ variants:
     quality: 92
     subsampling: 0        # 4:4:4
     suffix: ""            # MH_1022_01.jpg
+    # willhaben: не больше 6 МБ на снимок. Больше → ниже quality (до 75), затем меньше сторона.
+    max_bytes: 6000000    # байт, десятичные 6 МБ; без параметра предела нет
   full:
     max_side: null        # без уменьшения
     quality: 95
