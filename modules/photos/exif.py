@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from PIL import Image
+from PIL.TiffImagePlugin import IFDRational
 
 EXIF_IFD = 0x8769
 GPS_IFD = 0x8825
@@ -26,6 +27,22 @@ EXIF_KEEP = (
 )
 
 
+# Знаменатель дробей EXIF не больше этого: iPhone-JPEG (снимки «совместимым форматом», MPO) дают
+# FocalLength как float32 → дробь 2988413/524283 вместо 57/10. Такие файлы willhaben отклонял
+# (MH_1016, 2026-10-02), пересохранённые с ровной дробью — принимал.
+RATIONAL_MAX_DENOMINATOR = 10000
+
+
+def _tidy(value):
+    """Дробь EXIF с ровным знаменателем; прочие значения как есть."""
+    if isinstance(value, IFDRational):
+        if value.denominator == 0:
+            return value
+        frac = value.limit_rational(RATIONAL_MAX_DENOMINATOR)
+        return IFDRational(*frac)
+    return value
+
+
 def clean(src: Image.Exif | None) -> Image.Exif:
     """Новый EXIF только из белого списка; ориентация всегда 1 (поворот уже применён к пикселям)."""
     out = Image.Exif()
@@ -36,7 +53,7 @@ def clean(src: Image.Exif | None) -> Image.Exif:
     out[ORIENTATION] = 1
     if src is not None:
         sub_src = src.get_ifd(EXIF_IFD)
-        kept = {tag: sub_src[tag] for tag in EXIF_KEEP if tag in sub_src}
+        kept = {tag: _tidy(sub_src[tag]) for tag in EXIF_KEEP if tag in sub_src}
         if kept:
             out.get_ifd(EXIF_IFD).update(kept)
     return out
