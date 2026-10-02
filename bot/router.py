@@ -40,6 +40,16 @@ RESULTS = {
 }
 
 
+# общие команды для меню команд Telegram (bot.set_my_commands), после команд модулей
+COMMANDS = [
+    ("menu", "Главное меню"),
+    ("status", "Что сейчас в очереди"),
+    ("last", "Последние события"),
+    ("cancel", "Отменить диалог или приём фото"),
+    ("help", "Справка по командам"),
+]
+
+
 def help_text(module_help: Iterable[str] = ()) -> str:
     parts = [h.strip() for h in module_help if h and h.strip()]
     return "Команды:\n" + "\n".join(parts + [COMMON_HELP])

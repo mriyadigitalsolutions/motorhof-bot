@@ -75,3 +75,28 @@ def test_real_rclone_batches_with_cyrillic_and_spaces(tmp_path):
     out = base / ROOT / drive.output_dir(car)
     assert sorted(p.name for p in out.iterdir()) == sorted(names[:2])
     assert (out / "Снимок 1.HEIC").read_bytes() == "Снимок 1.HEIC".encode()
+
+
+def test_real_rclone_move_vehicle_keeps_empty_subfolders(tmp_path):
+    """rclone 1.71.1: `moveto` папки без лишних флагов переносит её целиком, с пустыми
+    подпапками (Документы, Verkauf, На выгрузку) — и обратно."""
+    base = tmp_path / "диск"
+    stock = "MH_AUTO_НАЛИЧИЕ/2026/MH_1022_Мазда 2"
+    photos = make_car(base, *stock.split("/"), {"Снимок 1.HEIC": b"abc"})
+    for sub in ("Документы", "Verkauf"):
+        (photos.parent / sub).mkdir()
+    (photos / "На выгрузку").mkdir()
+    drive = Drive(str(base), ROOT)
+
+    move = drive.move_vehicle(stock, "MH_AUTO_ПРОДАНО")
+    sold = base / ROOT / move.dst
+    assert move.dst == "MH_AUTO_ПРОДАНО/2026/MH_1022_Мазда 2" and move.year_created
+    assert not (base / ROOT / stock).exists()
+    assert (sold / "Фотографии" / "Снимок 1.HEIC").read_bytes() == b"abc"
+    for sub in ("Документы", "Verkauf", "Фотографии/На выгрузку"):
+        assert (sold / sub).is_dir() and not any((sold / sub).iterdir())
+    assert drive.size(move.dst).count == 1
+
+    back = drive.move_vehicle(move.dst, "MH_AUTO_НАЛИЧИЕ")
+    assert back.dst == stock and not back.year_created
+    assert (base / ROOT / stock / "Verkauf").is_dir() and not sold.exists()

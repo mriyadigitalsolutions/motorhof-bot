@@ -734,8 +734,10 @@ class Drive:
         return full
 
     def move_vehicle(self, src: str, dst: str) -> VehicleMove:
-        """Перенести папку машины целиком (`rclone moveto --create-empty-src-dirs`: со всеми подпапками, и пустыми, без чтения
-        содержимого): НАЛИЧИЕ → ПРОДАНО того же префикса или обратно, тот же год, то же имя.
+        """Перенести папку машины целиком (`rclone moveto` папки: на Drive — серверный перенос
+        самой папки со всеми подпапками, и пустыми, без чтения содержимого; флага
+        `--create-empty-src-dirs` у moveto в rclone 1.71.1 нет — «unknown flag», код 2):
+        НАЛИЧИЕ → ПРОДАНО того же префикса или обратно, тот же год, то же имя.
         dst — корень цели (`MH_AUTO_ПРОДАНО`) или полный путь (см. vehicle_target).
 
         Проверки до первого вызова rclone: границы (иначе PermissionError). Затем: нет корня
@@ -755,8 +757,7 @@ class Drive:
         elif self.find_dir(target) is not None:
             raise FileExistsError(f"в цели уже есть папка: {target}")
         self._check_move(src, target)
-        self._check(self._run("moveto", self.spec(src), self.spec(target),
-                                   "--create-empty-src-dirs"), "перенос папки")
+        self._check(self._run("moveto", self.spec(src), self.spec(target)), "перенос папки")
         return VehicleMove("/".join(_split(src)), target, year_created)
 
     def rename(self, src: str, dst: str) -> None:

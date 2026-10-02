@@ -66,3 +66,16 @@ def test_fake_copy_files_from_raw_like_rclone(tmp_path):
     assert fake(["rclone", "copy", str(src), "motorhof:x", "--files-from-raw", str(lst),
                  "--transfers", "0"]).returncode != 0
     assert fake(["rclone", "copy", "motorhof:нет", str(dst), "--files-from-raw", str(lst)]).returncode == 3
+
+
+def test_unknown_flag_is_rejected_like_rclone(base):
+    """Как rclone 1.71.1: у moveto нет --create-empty-src-dirs (код 2), у copy — есть."""
+    (base / "A" / "пусто").mkdir(parents=True)
+    fake = FakeRclone(base)
+    res = fake(["rclone", "moveto", "motorhof:A", "motorhof:B", "--create-empty-src-dirs"])
+    assert res.returncode == 2 and "unknown flag: --create-empty-src-dirs" in res.stderr
+    assert (base / "A").is_dir() and not (base / "B").exists()
+    assert fake(["rclone", "mkdir", "motorhof:C", "--json"]).returncode == 2
+    assert fake(["rclone", "copy", "motorhof:A", "motorhof:D", "--create-empty-src-dirs",
+                 "--transfers=2", "-v"]).returncode == 0
+    assert fake(["rclone", "deletefile", "motorhof:none", "--drive-use-trash=true"]).returncode == 4

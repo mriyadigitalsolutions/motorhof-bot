@@ -20,6 +20,8 @@ from aiogram import Bot, Dispatcher, Router
 from aiogram.exceptions import TelegramUnauthorizedError
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.fsm.strategy import FSMStrategy
+from aiogram.methods import SetMyCommands
+from aiogram.types import BotCommand
 from aiogram.utils.token import TokenValidationError, validate_token
 
 import modules
@@ -31,6 +33,7 @@ from core.settings import Settings, load_settings
 from . import menu as menu_mod
 from .auth import Access, AccessMiddleware
 from .dialogs import Dialogs
+from .router import COMMANDS as CORE_COMMANDS
 from .router import help_text, make_fallback_router, make_router
 
 log = logging.getLogger("bot")
@@ -46,6 +49,25 @@ class App:
     help: str
     menu: menu_mod.Menu | None = None
     dialogs: Dialogs | None = None
+    commands: list[tuple[str, str]] | None = None  # меню команд Telegram: (команда, описание)
+
+
+def collect_commands(loaded) -> list[tuple[str, str]]:
+    """Меню команд Telegram: COMMANDS модулей (в порядке ENABLED), затем общие из bot.router."""
+    out: list[tuple[str, str]] = []
+    for m in loaded:
+        out += list(getattr(m, "COMMANDS", ()))
+    return out + list(CORE_COMMANDS)
+
+
+async def set_commands(bot, commands: list[tuple[str, str]]) -> bool:
+    """Меню «/» в Telegram (setMyCommands). Best-effort: сбой — WARNING, старт продолжается."""
+    try:
+        await bot(SetMyCommands(commands=[BotCommand(command=c, description=d) for c, d in commands]))
+    except Exception as e:
+        log.warning("меню команд Telegram не установлено: %s: %s", type(e).__name__, e)
+        return False
+    return True
 
 
 def make_notify(bot) -> Notify:
@@ -88,10 +110,12 @@ def build(settings: Settings) -> App:
                        dialogs.router(), menu_mod.make_router(menu, dialogs), modules_router,
                        make_fallback_router(menu))
     log.info("модули: %s", ", ".join(m.__name__ for m in loaded) or "нет")
-    return App(settings, db, queue, access, dp, help_text(module_help), menu, dialogs)
+    return App(settings, db, queue, access, dp, help_text(module_help), menu, dialogs,
+               collect_commands(loaded))
 
 
 async def serve(app: App, bot: Bot) -> None:
+    await set_commands(bot, app.commands or [])
     await app.queue.start(make_notify(bot))
     try:
         await app.dispatcher.start_polling(bot, handle_signals=True)

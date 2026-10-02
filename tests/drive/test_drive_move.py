@@ -26,8 +26,7 @@ def test_move_to_sold_creates_year_and_moves_everything(drive, fake, car):
     assert (car / SOLD / "Документы" / "vertrag.pdf").is_file()
     assert (car / SOLD / "Verkauf").is_dir()
     assert fake.commands("mkdir") == [["mkdir", f"motorhof:{ROOT}/MH_AUTO_ПРОДАНО/2026"]]
-    assert fake.commands("moveto") == [["moveto", f"motorhof:{ROOT}/{STOCK}", f"motorhof:{ROOT}/{SOLD}",
-                                         "--create-empty-src-dirs"]]
+    assert fake.commands("moveto") == [["moveto", f"motorhof:{ROOT}/{STOCK}", f"motorhof:{ROOT}/{SOLD}"]]
 
 
 def test_move_back_with_existing_year(drive, fake, base):

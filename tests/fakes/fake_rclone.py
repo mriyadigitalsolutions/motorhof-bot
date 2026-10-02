@@ -2,7 +2,9 @@
 
 Понимает то подмножество rclone, которым пользуется Drive-слой: `lsjson` (`--dirs-only`,
 `--files-only`, `--max-depth`, `--hash`, `--stat`), `copyto`, `copy` (`--files-from-raw`,
-`--transfers`, `--ignore-existing`), `moveto` (файл или папка целиком), `mkdir`, `deletefile`, `size --json`. `copy` — как rclone 1.71.1: имени из списка нет
+`--transfers`, `--ignore-existing`), `moveto` (файл или папка целиком), `mkdir`, `deletefile`, `size --json`.
+Флаги проверяются, как у rclone 1.71.1: неизвестный для команды флаг (`COMMAND_FLAGS` по
+`rclone <cmd> --help` + `GLOBAL_FLAGS`) → код 2, «unknown flag», команда не выполняется. `copy` — как rclone 1.71.1: имени из списка нет
 в источнике — молча пропускается (код 0), папка назначения создаётся, нет папки-источника — код 3.
 Отдаёт `ID` и `Hashes.sha256` как Google Drive; `lsjson --stat` по папке —
 ошибка (на общем диске Drive он медленный и без `ID`): папки ищутся листингом родителя. Путь `<remote>:<путь>` ведёт в `base/<путь>`,
@@ -32,6 +34,42 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from core.drive import RunResult
+
+# Группы флагов из справки rclone 1.71.1 (`rclone <cmd> --help`).
+_IMPORTANT = {"-h", "--help", "-n", "--dry-run", "-i", "--interactive", "-v", "--verbose"}
+_FILTER = {
+    "--delete-excluded", "--exclude", "--exclude-from", "--exclude-if-present", "--files-from",
+    "--files-from-raw", "-f", "--filter", "--filter-from", "--hash-filter", "--ignore-case", "--include",
+    "--include-from", "--max-age", "--max-depth", "--max-size", "--metadata-exclude",
+    "--metadata-exclude-from", "--metadata-filter", "--metadata-filter-from", "--metadata-include",
+    "--metadata-include-from", "--min-age", "--min-size",
+}
+_LISTING = {"--default-time", "--fast-list"}
+_COPY = {
+    "--check-first", "-c", "--checksum", "--compare-dest", "--copy-dest", "--cutoff-mode",
+    "--ignore-case-sync", "--ignore-checksum", "--ignore-existing", "--ignore-size", "-I",
+    "--ignore-times", "--immutable", "--inplace", "-l", "--links", "--max-backlog", "--max-duration",
+    "--max-transfer", "-M", "--metadata", "--modify-window", "--multi-thread-chunk-size",
+    "--multi-thread-cutoff", "--multi-thread-streams", "--multi-thread-write-buffer-size",
+    "--name-transform", "--no-check-dest", "--no-traverse", "--no-update-dir-modtime",
+    "--no-update-modtime", "--order-by", "--partial-suffix", "--refresh-times",
+    "--server-side-across-configs", "--size-only", "--streaming-upload-cutoff", "-u", "--update",
+}
+# флаги отчёта о сверке (copy/copyto/moveto в 1.71 принимают их, как check)
+_CHECK_REPORT = {
+    "--absolute", "--combined", "--csv", "--dest-after", "--differ", "-d", "--dir-slash", "--dirs-only",
+    "--error", "--files-only", "-F", "--format", "--hash", "--match", "--missing-on-dst",
+    "--missing-on-src", "-s", "--separator", "-t", "--timeformat",
+}
+# Глобальные флаги (`rclone help flags`), которые принимает любая команда; только нужное
+# боту и близкое к нему — список rclone огромен (вместе с флагами бэкендов).
+GLOBAL_FLAGS = {
+    "--config", "--transfers", "--checkers", "--timeout", "--contimeout", "--retries",
+    "--low-level-retries", "--log-level", "--log-file", "-q", "--quiet", "--stats", "--progress", "-P",
+    "--use-json-log", "--drive-use-trash", "--drive-chunk-size", "--drive-pacer-min-sleep",
+    "--drive-pacer-burst", "--tpslimit", "--tpslimit-burst", "--bwlimit",
+}
+
 
 NOTICE = 'NOTICE: Config file "/root/.config/rclone/rclone.conf" not found - using defaults'
 
@@ -112,6 +150,20 @@ class FakeRclone:
 
     # флаги rclone, у которых есть значение отдельным аргументом
     VALUE_FLAGS = {"--max-depth", "--hash-type", "--timeout", "--config", "--files-from-raw", "--transfers"}
+    # Допустимые флаги — как у rclone 1.71.1 (`rclone <cmd> --help`, раздел Flags со всеми
+    # группами, плюс глобальные из GLOBAL_FLAGS); неизвестный флаг → код 2, как у rclone.
+    # Новый флаг в core/drive.py — сначала сверить с `rclone <cmd> --help` нужной версии.
+    COMMAND_FLAGS = {
+        "lsjson": {*_IMPORTANT, *_FILTER, *_LISTING,
+                   "--dirs-only", "--encrypted", "--files-only", "--hash", "--hash-type", "--metadata", "-M",
+                   "--no-mimetype", "--no-modtime", "--original", "--recursive", "-R", "--stat"},
+        "copy": {*_IMPORTANT, *_FILTER, *_LISTING, *_COPY, *_CHECK_REPORT, "--create-empty-src-dirs"},
+        "copyto": {*_IMPORTANT, *_FILTER, *_LISTING, *_COPY, *_CHECK_REPORT},
+        "moveto": {*_IMPORTANT, *_FILTER, *_LISTING, *_COPY, *_CHECK_REPORT},
+        "mkdir": set(_IMPORTANT),
+        "deletefile": set(_IMPORTANT),
+        "size": {*_FILTER, *_LISTING, "--json"},
+    }
 
     def __call__(self, args: list[str], timeout: float | None = None) -> RunResult:
         args = list(args)
@@ -119,6 +171,14 @@ class FakeRclone:
         self.timeouts.append(timeout)
         assert all(isinstance(a, str) for a in args), "аргументы — только строки"
         cmd, rest = args[1], args[2:]
+        allowed = self.COMMAND_FLAGS.get(cmd)
+        if allowed is not None:
+            for a in rest:
+                name = a.split("=", 1)[0]
+                if a.startswith("-") and name not in allowed and name not in GLOBAL_FLAGS:
+                    usage = f"Usage:\n  rclone {cmd} [flags]\n"
+                    return RunResult(2, "", f"Error: unknown flag: {name}\n{usage}"
+                                     f"NOTICE: Fatal error: unknown flag: {name}\n")
         if "--files-from-raw" in rest:  # список удаляется сразу после вызова — запоминаем имена
             listing = Path(rest[rest.index("--files-from-raw") + 1])
             self.listed[len(self.calls) - 1] = [

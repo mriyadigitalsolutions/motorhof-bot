@@ -21,6 +21,7 @@ from .renumber import Renumberer
 
 MODULE = handlers.MODULE
 HELP = handlers.HELP
+COMMANDS = handlers.COMMANDS
 
 def register(router: Router, queue: JobQueue, *, settings: Settings | None = None,
              drive: Drive | None = None, workdir: Path | None = None, menu=None,

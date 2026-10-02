@@ -71,5 +71,32 @@ def test_build_dispatcher_wires_everything(monkeypatch, tmp_path, caplog):
         assert app.dispatcher["access"] is app.access
         assert any(isinstance(m, AccessMiddleware) for m in app.dispatcher.update.outer_middleware)
         assert "/fotos" in app.help
+        names = [c for c, _ in app.commands]
+        assert sorted(names) == sorted(["fotos", "upload", "lager", "neu", "verkauft", "zurueck",
+                                        "menu", "status", "last", "cancel", "help"])
+        assert names[-5:] == ["menu", "status", "last", "cancel", "help"]
+        assert all(d and len(d) <= 256 for _, d in app.commands)
     finally:
         app.db.close()
+
+
+async def test_set_commands_sends_set_my_commands():
+    from aiogram.methods import SetMyCommands
+
+    from tests.fakes.telegram import FakeBot as TelegramBot
+    bot = TelegramBot()
+    assert await bot_main.set_commands(bot, [("fotos", "Форматировать фото"), ("help", "Справка")])
+    [method] = bot.methods
+    assert isinstance(method, SetMyCommands)
+    assert [(c.command, c.description) for c in method.commands] == [
+        ("fotos", "Форматировать фото"), ("help", "Справка")]
+
+
+async def test_set_commands_failure_is_warning_only(caplog):
+    class Broken:
+        async def __call__(self, method, request_timeout=None):
+            raise RuntimeError("сеть недоступна")
+
+    with caplog.at_level(logging.WARNING, logger="bot"):
+        assert await bot_main.set_commands(Broken(), [("help", "Справка")]) is False
+    assert "меню команд" in caplog.text and "сеть недоступна" in caplog.text
